@@ -10,10 +10,12 @@ import { clearReadDemoSessions } from "./demoSessionState";
 import { globalResumeLocation, projectResumeLocation } from "./routeResume";
 import { getRememberedGlobalWorkspace, globalWorkspaceWriter } from "./workspacePersistence";
 import { initialPanelWidth } from "./panelLayout";
+import { parseLibraryEditorSearch } from "./libraryEditorRoute";
 import { m } from "./paraglide/messages.js";
 import { Onboarding } from "./components/Onboarding";
 import { ProjectsHome } from "./components/ProjectsHome";
 import { LibraryTab } from "./components/SkillsTab";
+import { LibraryEditorPage } from "./components/LibraryEditorPage";
 import { HandbookTab } from "./components/HandbookTab";
 import { PromptGistsTab } from "./components/PromptGistsTab";
 import { TeamPapersTab } from "./components/TeamPapersTab";
@@ -133,9 +135,20 @@ export function ProjectsPage() {
  * Handbook, Prompt Gists, and Team Papers stay reachable with zero projects.
  * The active panel lives in the URL so the home entry cards can deep-link. */
 export function TeamPage() {
-  const { section } = useSearch({ from: "/team" });
+  const search = useSearch({ from: "/team" });
   const navigate = useNavigate();
-  const active = section ?? "library";
+  const active = search.section ?? "library";
+  // The library editor is a full page of this shell, addressed by the item (and
+  // optionally one of its files) in the URL, so a card click, a pasted link and
+  // the browser's back button all agree on what is open. The router spreads a
+  // route's `validateSearch` result *over* the raw params, so an unknown kind or
+  // source survives it; parse again here to make the page, not the URL, decide
+  // whether there is an item to open.
+  const target = parseLibraryEditorSearch(search);
+  const editingItem =
+    active === "library" && target.kind !== undefined && target.source !== undefined && target.id !== undefined
+      ? { kind: target.kind, source: target.source, id: target.id, path: target.path }
+      : null;
   useEffect(() => { document.title = m.team_shell_title(); }, []);
   return (
     <div className="app flex h-full flex-col bg-canvas">
@@ -171,9 +184,32 @@ export function TeamPage() {
           {active === "handbook" ? (
             <HandbookTab />
           ) : active === "library" ? (
-            <div className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable_both-edges]">
-              <LibraryTab />
-            </div>
+            editingItem ? (
+              <LibraryEditorPage
+                kind={editingItem.kind}
+                source={editingItem.source}
+                id={editingItem.id}
+                path={editingItem.path}
+                onBack={() => void navigate({ to: "/team", search: { section: "library" } })}
+                onSelectFile={(next) =>
+                  void navigate({
+                    to: "/team",
+                    search: {
+                      section: "library",
+                      kind: editingItem.kind,
+                      source: editingItem.source,
+                      id: editingItem.id,
+                      ...(next ? { path: next } : {}),
+                    },
+                    replace: true,
+                  })
+                }
+              />
+            ) : (
+              <div className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable_both-edges]">
+                <LibraryTab />
+              </div>
+            )
           ) : active === "promptGists" ? (
             <PromptGistsTab />
           ) : (

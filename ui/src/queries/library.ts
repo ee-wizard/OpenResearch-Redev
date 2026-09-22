@@ -1,11 +1,14 @@
 import { queryOptions, useMutation } from "@tanstack/react-query";
 import {
+  createLibraryFile,
+  deleteLibraryFile,
   deleteLibraryItem,
   getLibraryItem,
   listChatAttachments,
   listLibraryItems,
   updateLibraryItem,
   createLibraryItem,
+  type CreateLibraryItemBody,
   type LibraryKind,
   type LibrarySource,
 } from "../api";
@@ -25,21 +28,30 @@ export const listChatAttachmentsQuery = () =>
     staleTime: 30_000,
   });
 
+/** One file of an item; `path` omitted reads the item's primary file. */
 export const getLibraryItemQuery = (
   kind: LibraryKind,
   id: string,
   source: LibrarySource = "team",
+  path?: string,
 ) =>
   queryOptions({
-    queryKey: workspaceKey("getLibraryItem", kind, id, source),
-    queryFn: ({ signal }) => getLibraryItem(kind, id, source, signal),
+    queryKey: workspaceKey("getLibraryItem", kind, id, source, path ?? null),
+    queryFn: ({ signal }) => getLibraryItem(kind, id, source, path, signal),
     staleTime: 30_000,
+  });
+
+/** Adding, removing or rewriting a file also changes the folder listing, so
+ * every file of the item is invalidated rather than only the edited one. */
+const invalidateLibraryItem = (kind: LibraryKind, id: string, source: LibrarySource) =>
+  queryClient.invalidateQueries({
+    queryKey: workspaceKey("getLibraryItem", kind, id, source),
   });
 
 export function useCreateLibraryItem() {
   return useMutation({
-    mutationFn: (req: { kind: LibraryKind; name: string; content: string }) =>
-      createLibraryItem(req.kind, req.name, req.content),
+    mutationFn: (req: { kind: LibraryKind; body: CreateLibraryItemBody }) =>
+      createLibraryItem(req.kind, req.body),
     onSuccess: (_, vars) => {
       void queryClient.invalidateQueries({
         queryKey: workspaceKey("listLibraryItems", vars.kind, "team"),
@@ -55,14 +67,38 @@ export function useUpdateLibraryItem() {
       id: string;
       source: LibrarySource;
       content: string;
-    }) => updateLibraryItem(req.kind, req.id, req.source, req.content),
+      path?: string;
+    }) => updateLibraryItem(req.kind, req.id, req.source, req.content, req.path),
     onSuccess: (_, vars) => {
-      void queryClient.invalidateQueries({
-        queryKey: workspaceKey("getLibraryItem", vars.kind, vars.id, vars.source),
-      });
+      void invalidateLibraryItem(vars.kind, vars.id, vars.source);
       void queryClient.invalidateQueries({
         queryKey: workspaceKey("listLibraryItems", vars.kind, vars.source),
       });
+    },
+  });
+}
+
+export function useCreateLibraryFile() {
+  return useMutation({
+    mutationFn: (req: {
+      kind: LibraryKind;
+      id: string;
+      source: LibrarySource;
+      path: string;
+      content: string;
+    }) => createLibraryFile(req.kind, req.id, req.source, req.path, req.content),
+    onSuccess: (_, vars) => {
+      void invalidateLibraryItem(vars.kind, vars.id, vars.source);
+    },
+  });
+}
+
+export function useDeleteLibraryFile() {
+  return useMutation({
+    mutationFn: (req: { kind: LibraryKind; id: string; source: LibrarySource; path: string }) =>
+      deleteLibraryFile(req.kind, req.id, req.source, req.path),
+    onSuccess: (_, vars) => {
+      void invalidateLibraryItem(vars.kind, vars.id, vars.source);
     },
   });
 }

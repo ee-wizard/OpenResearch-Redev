@@ -1,17 +1,16 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
+import { useNavigate } from "@tanstack/react-router";
 
 import { listUserSkillsQuery, listLatexTemplatesQuery } from "../queries/settings";
 import {
   listChatAttachmentsQuery,
   listLibraryItemsQuery,
-  getLibraryItemQuery,
   useCreateLibraryItem,
   useDeleteLibraryItem,
-  useUpdateLibraryItem,
 } from "../queries/library";
 import { m } from "../paraglide/messages.js";
 import { ltr } from "../i18n";
-import { RefreshCw, Trash2, Upload, Bot, WandSparkles, FileText, Plus } from "lucide-react";
+import { RefreshCw, Trash2, Upload, Bot, WandSparkles, Plus } from "lucide-react";
 import { useCallback, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import {
   deleteLatexTemplate,
@@ -47,7 +46,6 @@ const LIBRARY_CARD_CLASS_NAME =
 /** Container-query columns: the Library lives in panes of very different widths
  * (a resizable middle pane, or the wide standalone shell). */
 const LIBRARY_GRID_CLASS_NAME = "grid grid-cols-1 gap-3 @2xl:grid-cols-2 @5xl:grid-cols-3";
-const LIBRARY_CARD_FULL_SPAN_CLASS_NAME = "@2xl:col-span-2 @5xl:col-span-3";
 
 /** Read a File into base64 (strips the `data:...;base64,` prefix). */
 function fileToBase64(file: File): Promise<string> {
@@ -441,7 +439,7 @@ function LatexTemplatesCard() {
   );
 }
 
-function sourceBadge(source: string) {
+export function sourceBadge(source: string) {
   switch (source) {
     case "builtin":
       return <Badge size="small">{m.library_built_in()}</Badge>;
@@ -466,41 +464,8 @@ function sourceBadge(source: string) {
   }
 }
 
-function kindIcon(kind: LibraryKind) {
+export function kindIcon(kind: LibraryKind) {
   return kind === "agent" ? <Bot size={15} /> : <WandSparkles size={15} />;
-}
-
-function LibraryEditor({
-  content,
-  onChange,
-  onSave,
-  onRevert,
-  busy,
-}: {
-  content: string;
-  onChange: (value: string) => void;
-  onSave: () => void;
-  onRevert: () => void;
-  busy: boolean;
-}) {
-  return (
-    <div className="mt-2 flex flex-col gap-2">
-      <textarea
-        value={content}
-        onChange={(e) => onChange(e.target.value)}
-        rows={12}
-        className="w-full rounded-md border border-border bg-background px-3 py-2 font-mono text-sm text-text focus:outline-none focus:ring-2 focus:ring-primary"
-      />
-      <div className="flex gap-2">
-        <Button size="small" variant="primary" onClick={onSave} disabled={busy}>
-          {m.common_save()}
-        </Button>
-        <Button size="small" onClick={onRevert} disabled={busy}>
-          {m.library_revert()}
-        </Button>
-      </div>
-    </div>
-  );
 }
 
 function LibraryRow({
@@ -510,34 +475,17 @@ function LibraryRow({
   item: LibraryItem;
   onError: (message: string) => void;
 }) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState("");
-  const updateMutation = useUpdateLibraryItem();
+  const navigate = useNavigate();
   const deleteMutation = useDeleteLibraryItem();
-  const contentQuery = useQuery(getLibraryItemQuery(item.kind, item.id, item.source));
 
-  const startEdit = useCallback(() => {
-    setDraft(contentQuery.data?.content ?? "");
-    setEditing(true);
-  }, [contentQuery.data]);
-
-  const save = useCallback(async () => {
-    try {
-      await updateMutation.mutateAsync({
-        kind: item.kind,
-        id: item.id,
-        source: item.source,
-        content: draft,
-      });
-      setEditing(false);
-    } catch (e) {
-      onError(e instanceof Error ? e.message : String(e));
-    }
-  }, [item, draft, updateMutation, onError]);
-
-  const revert = useCallback(() => {
-    setDraft(contentQuery.data?.content ?? "");
-  }, [contentQuery.data]);
+  // The whole card opens the editor page: a skill folder needs far more room
+  // than a grid cell, and the page is deep-linkable from wherever it was opened.
+  const openEditor = useCallback(() => {
+    void navigate({
+      to: "/team",
+      search: { section: "library", kind: item.kind, source: item.source, id: item.id },
+    });
+  }, [navigate, item]);
 
   const remove = useCallback(async () => {
     if (!window.confirm(m.library_delete_confirm({ name: ltr(item.name) }))) return;
@@ -553,52 +501,38 @@ function LibraryRow({
   }, [item, deleteMutation, onError]);
 
   return (
-    <div
-      className={`${LIBRARY_CARD_CLASS_NAME}${
-        editing ? ` ${LIBRARY_CARD_FULL_SPAN_CLASS_NAME}` : ""
-      }`}
-    >
+    <div className={LIBRARY_CARD_CLASS_NAME}>
       <div className="flex items-start gap-2">
-        <div className="flex min-w-0 flex-1 flex-col gap-1">
-          <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          onClick={openEditor}
+          title={ltr(item.dirPath)}
+          className="flex min-w-0 flex-1 flex-col gap-1 rounded-md text-start"
+        >
+          <span className="flex flex-wrap items-center gap-2">
             {kindIcon(item.kind)}
             <span className="text-base font-medium text-text">{item.name}</span>
             {sourceBadge(item.source)}
-          </div>
-          <p className={LIBRARY_PATH_CLASS_NAME}>{item.filePath}</p>
-        </div>
-        <div className="shrink-0 flex items-center gap-1">
+          </span>
+          <span className={LIBRARY_PATH_CLASS_NAME}>{item.filePath}</span>
+          <span className="text-xs text-subtext">
+            {item.files.length === 1
+              ? m.library_one_file()
+              : m.library_file_count({ count: fmtNumber(item.files.length) })}
+          </span>
+        </button>
+        {(item.source === "team" || item.source === "supervisor") && (
           <IconButton
             size="small"
-            data-tip={m.prompt_gists_edit()}
-            aria-label={m.prompt_gists_edit()}
-            onClick={startEdit}
-            disabled={editing}
+            data-tip={m.prompt_gists_delete()}
+            aria-label={m.prompt_gists_delete()}
+            onClick={() => void remove()}
+            disabled={deleteMutation.isPending}
           >
-            <FileText size={13} />
+            <Trash2 size={13} />
           </IconButton>
-          {(item.source === "team" || item.source === "supervisor") && (
-            <IconButton
-              size="small"
-              data-tip={m.prompt_gists_delete()}
-              aria-label={m.prompt_gists_delete()}
-              onClick={remove}
-              disabled={deleteMutation.isPending}
-            >
-              <Trash2 size={13} />
-            </IconButton>
-          )}
-        </div>
+        )}
       </div>
-      {editing && (
-        <LibraryEditor
-          content={draft}
-          onChange={setDraft}
-          onSave={save}
-          onRevert={revert}
-          busy={updateMutation.isPending}
-        />
-      )}
     </div>
   );
 }
@@ -652,24 +586,68 @@ function LibraryCreateRow({
   onDone: () => void;
   onError: (message: string) => void;
 }) {
+  const navigate = useNavigate();
   const [open, setOpen] = useState(false);
+  const [mode, setMode] = useState<"file" | "zip">("file");
   const [name, setName] = useState("");
   const [content, setContent] = useState("");
+  const [zipFile, setZipFile] = useState<File | null>(null);
+  const [busy, setBusy] = useState(false);
   const createMutation = useCreateLibraryItem();
+
+  const chooseZip = useCallback(
+    (file: File) => {
+      if (!file.name.toLowerCase().endsWith(".zip")) {
+        onError(m.library_folder_zip_required());
+        return;
+      }
+      if (file.size > MAX_UPLOAD_BYTES) {
+        onError(m.skills_file_too_large());
+        return;
+      }
+      setZipFile(file);
+    },
+    [onError],
+  );
 
   const submit = useCallback(async () => {
     const trimmed = name.trim();
     if (!trimmed) return;
+    if (mode === "zip" && !zipFile) {
+      onError(m.library_folder_zip_required());
+      return;
+    }
+    setBusy(true);
     try {
-      await createMutation.mutateAsync({ kind, name: trimmed, content });
+      const created = await createMutation.mutateAsync({
+        kind,
+        body:
+          mode === "zip" && zipFile
+            ? { name: trimmed, filename: zipFile.name, contentBase64: await fileToBase64(zipFile) }
+            : { name: trimmed, content },
+      });
       setName("");
       setContent("");
+      setZipFile(null);
       setOpen(false);
       onDone();
+      // Straight into the new folder: a skill the author cannot see is a skill
+      // they cannot finish.
+      void navigate({
+        to: "/team",
+        search: {
+          section: "library",
+          kind: created.item.kind,
+          source: created.item.source,
+          id: created.item.id,
+        },
+      });
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
     }
-  }, [kind, name, content, createMutation, onDone, onError]);
+  }, [kind, mode, name, content, zipFile, createMutation, onDone, onError, navigate]);
 
   if (!open) {
     return (
@@ -680,25 +658,72 @@ function LibraryCreateRow({
     );
   }
 
+  const pending = busy || createMutation.isPending;
   return (
     <div className="flex flex-col gap-2 py-2">
+      <div className="flex items-center gap-2">
+        <Button
+          size="small"
+          variant={mode === "file" ? "primary" : "default"}
+          aria-pressed={mode === "file"}
+          disabled={pending}
+          onClick={() => setMode("file")}
+        >
+          {m.library_single_file()}
+        </Button>
+        <Button
+          size="small"
+          variant={mode === "zip" ? "primary" : "default"}
+          aria-pressed={mode === "zip"}
+          disabled={pending}
+          onClick={() => setMode("zip")}
+        >
+          {m.library_skill_folder()}
+        </Button>
+      </div>
       <Input
         value={name}
         onChange={(e) => setName(e.currentTarget.value)}
         placeholder={m.library_name_placeholder()}
+        disabled={pending}
       />
-      <textarea
-        value={content}
-        onChange={(e) => setContent(e.target.value)}
-        rows={10}
-        placeholder={m.library_content_placeholder()}
-        className="w-full rounded-md border border-border bg-background px-3 py-2 font-mono text-sm text-text focus:outline-none focus:ring-2 focus:ring-primary"
-      />
+      {mode === "file" ? (
+        <textarea
+          value={content}
+          onChange={(e) => setContent(e.target.value)}
+          rows={10}
+          placeholder={m.library_content_placeholder()}
+          className="w-full rounded-md border border-border bg-background px-3 py-2 font-mono text-sm text-text focus:outline-none focus:ring-2 focus:ring-primary"
+        />
+      ) : (
+        <DropZone
+          accept=".zip"
+          busy={pending}
+          prompt={
+            zipFile ? (
+              <>
+                <span>{m.library_zip_selected({ filename: ltr(zipFile.name) })}</span>
+                <span className="block ps-4 mt-1 text-text">{m.library_drop_folder()}</span>
+              </>
+            ) : (
+              <span>{m.library_drop_folder()}</span>
+            )
+          }
+          onFile={chooseZip}
+        />
+      )}
       <div className="flex gap-2">
-        <Button size="small" variant="primary" onClick={submit} disabled={createMutation.isPending}>
+        <Button size="small" variant="primary" onClick={() => void submit()} disabled={pending}>
           {m.prompt_gists_create()}
         </Button>
-        <Button size="small" onClick={() => setOpen(false)} disabled={createMutation.isPending}>
+        <Button
+          size="small"
+          disabled={pending}
+          onClick={() => {
+            setOpen(false);
+            setZipFile(null);
+          }}
+        >
           {m.prompt_gists_cancel()}
         </Button>
       </div>

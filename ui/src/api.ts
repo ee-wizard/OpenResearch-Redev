@@ -1874,11 +1874,24 @@ export const getTeamPaperText = (projectId: string | null, paperId: string, sign
 export type LibraryKind = "skill" | "agent";
 export type LibrarySource = "builtin" | "team" | "project" | "supervisor";
 
+/** One file inside a library item's folder. `path` is relative to `dirPath`,
+ * `/`-separated. */
+export interface LibraryFile {
+  path: string;
+  bytes: number;
+}
+
 export interface LibraryItem {
   id: string;
   kind: LibraryKind;
   name: string;
   source: LibrarySource;
+  /** Absolute path of the item's folder: a skill is a folder — `SKILL.md` plus
+   * its references, scripts, templates and assets — not a single file. */
+  dirPath: string;
+  /** Every file in the folder, the primary file first. */
+  files: LibraryFile[];
+  /** Absolute path of the primary file (`SKILL.md` or `shim.md`). */
   filePath: string;
   editable: boolean;
 }
@@ -1896,29 +1909,69 @@ export const listLibraryItems = (
     signal,
   ).then((r) => r.items);
 
+/** Read one file of an item, defaulting to its primary file. `path` is the
+ * relative path the response describes, so a caller that omitted one learns
+ * which file it got. */
 export const getLibraryItem = (
   kind: LibraryKind,
   id: string,
   source: LibrarySource = "team",
+  path?: string,
   signal?: AbortSignal,
 ) =>
-  get<{ item: LibraryItem; content: string }>(
-    `/api/library/${encodeURIComponent(kind)}/${encodeURIComponent(id)}?source=${encodeURIComponent(source)}`,
+  get<{ item: LibraryItem; path: string; content: string }>(
+    `/api/library/${encodeURIComponent(kind)}/${encodeURIComponent(id)}?${new URLSearchParams({
+      source,
+      ...(path ? { path } : {}),
+    })}`,
     signal,
   );
 
-export const createLibraryItem = (kind: LibraryKind, name: string, content: string) =>
-  post<{ item: LibraryItem }>(`/api/library/${encodeURIComponent(kind)}`, { name, content });
+/** A new item is either one markdown file or a `.zip` of a whole skill folder. */
+export type CreateLibraryItemBody =
+  | { name: string; content: string }
+  | { name: string; filename: string; contentBase64: string };
+
+export const createLibraryItem = (kind: LibraryKind, body: CreateLibraryItemBody) =>
+  post<{ item: LibraryItem }>(`/api/library/${encodeURIComponent(kind)}`, body);
 
 export const updateLibraryItem = (
   kind: LibraryKind,
   id: string,
   source: LibrarySource,
   content: string,
+  path?: string,
 ) =>
-  patch<{ path: string }>(
+  patch<{ path: string; dirPath: string }>(
     `/api/library/${encodeURIComponent(kind)}/${encodeURIComponent(id)}?source=${encodeURIComponent(source)}`,
-    { content },
+    path ? { content, path } : { content },
+  );
+
+const libraryFilesUrl = (kind: LibraryKind, id: string, source: LibrarySource, path?: string) =>
+  `/api/library/${encodeURIComponent(kind)}/${encodeURIComponent(id)}/files?${new URLSearchParams({
+    source,
+    ...(path ? { path } : {}),
+  })}`;
+
+/** Add a file to an item's folder. The backend refuses an existing path. */
+export const createLibraryFile = (
+  kind: LibraryKind,
+  id: string,
+  source: LibrarySource,
+  path: string,
+  content: string,
+) =>
+  post<{ path: string; dirPath: string }>(libraryFilesUrl(kind, id, source), { path, content });
+
+/** Remove a file from an item's folder. The primary file cannot be removed. */
+export const deleteLibraryFile = (
+  kind: LibraryKind,
+  id: string,
+  source: LibrarySource,
+  path: string,
+) =>
+  writeResponse(libraryFilesUrl(kind, id, source, path), { method: "DELETE" }).then((r) =>
+    json<{ ok: boolean }>(r),
   );
 
 export const deleteLibraryItem = (kind: LibraryKind, id: string, source: LibrarySource = "team") =>
