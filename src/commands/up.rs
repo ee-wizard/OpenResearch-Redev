@@ -2780,6 +2780,30 @@ fn prompt_gist_json(gist: &local::model::PromptGist) -> Value {
     serde_json::to_value(gist).unwrap_or_else(|_| json!({ "id": gist.id }))
 }
 
+/// A project context sees its own gists plus the global (team-wide) ones; a
+/// gist owned by another project stays invisible and 404s.
+fn gist_visible_in_project(gist: &local::model::PromptGist, project_id: &str) -> bool {
+    gist.project_id
+        .as_deref()
+        .is_none_or(|pid| pid == project_id)
+}
+
+/// Guard a `?projectId=`-scoped gist route: an id owned by a different project
+/// 404s, while a global gist stays readable/editable from any project.
+fn scoped_gist(
+    store: &Store,
+    id: &str,
+    project_id: Option<&str>,
+) -> std::result::Result<local::model::PromptGist, ApiError> {
+    let gist = store
+        .get_prompt_gist(id)?
+        .ok_or_else(|| not_found("gist"))?;
+    match project_id.filter(|p| !p.trim().is_empty()) {
+        Some(pid) if !gist_visible_in_project(&gist, pid) => Err(not_found("gist")),
+        _ => Ok(gist),
+    }
+}
+
 fn validate_prompt_gist_project(store: &Store, project_id: Option<&str>) -> Result<(), ApiError> {
     if let Some(pid) = project_id {
         if store.get_local_project(pid)?.is_none() {
@@ -2827,14 +2851,7 @@ async fn create_prompt_gist(Json(req): Json<CreatePromptGistReq>) -> ApiResult {
 
 async fn get_prompt_gist(Path(id): Path<String>, Query(q): Query<PromptGistsQuery>) -> ApiResult {
     let store = Store::open()?;
-    let gist = store
-        .get_prompt_gist(&id)?
-        .ok_or_else(|| not_found("gist"))?;
-    if let Some(pid) = &q.project_id {
-        if gist.project_id.as_ref() != Some(pid) {
-            return Err(not_found("gist"));
-        }
-    }
+    let gist = scoped_gist(&store, &id, q.project_id.as_deref())?;
     Ok(Json(json!({ "gist": prompt_gist_json(&gist) })))
 }
 
@@ -2844,14 +2861,7 @@ async fn update_prompt_gist(
     Json(req): Json<UpdatePromptGistReq>,
 ) -> ApiResult {
     let store = Store::open()?;
-    let mut gist = store
-        .get_prompt_gist(&id)?
-        .ok_or_else(|| not_found("gist"))?;
-    if let Some(pid) = &q.project_id {
-        if gist.project_id.as_ref() != Some(pid) {
-            return Err(not_found("gist"));
-        }
-    }
+    let mut gist = scoped_gist(&store, &id, q.project_id.as_deref())?;
     if let Some(project_id) = req.project_id {
         validate_prompt_gist_project(&store, project_id.as_deref())?;
         gist.project_id = project_id.filter(|p| !p.trim().is_empty());
@@ -2887,14 +2897,7 @@ async fn delete_prompt_gist(
     Query(q): Query<PromptGistsQuery>,
 ) -> ApiResult {
     let store = Store::open()?;
-    let gist = store
-        .get_prompt_gist(&id)?
-        .ok_or_else(|| not_found("gist"))?;
-    if let Some(pid) = &q.project_id {
-        if gist.project_id.as_ref() != Some(pid) {
-            return Err(not_found("gist"));
-        }
-    }
+    scoped_gist(&store, &id, q.project_id.as_deref())?;
     if !store.delete_prompt_gist(&id)? {
         return Err(not_found("gist"));
     }

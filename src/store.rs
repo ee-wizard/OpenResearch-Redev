@@ -2000,6 +2000,9 @@ impl Store {
         Ok(g)
     }
 
+    /// `None` lists only team-wide (global) gists; `Some(project_id)` lists that
+    /// project's own gists plus the global ones every project sees — the same
+    /// rule `list_team_papers` follows.
     pub fn list_prompt_gists(&self, project_id: Option<&str>) -> Result<Vec<PromptGist>> {
         if let Some(pid) = project_id {
             let mut stmt = self.conn.prepare(&format!(
@@ -2011,7 +2014,8 @@ impl Store {
             Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
         } else {
             let mut stmt = self.conn.prepare(&format!(
-                "SELECT {PROMPT_GIST_COLS} FROM prompt_gists ORDER BY updated_at DESC"
+                "SELECT {PROMPT_GIST_COLS} FROM prompt_gists WHERE project_id IS NULL \
+                 ORDER BY updated_at DESC"
             ))?;
             let rows = stmt.query_map([], PromptGist::from_row)?;
             Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
@@ -5579,47 +5583,67 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Global gists are listed alone by the global view and alongside a
+    /// project's own by that project's view — the same rule team papers follow.
     #[test]
     fn prompt_gists_support_global_and_project_scoped() {
         let dir =
             std::env::temp_dir().join(format!("orx-store-prompt-gist-{}", uuid::Uuid::new_v4()));
         let store = Store::open_at(dir.clone()).unwrap();
-        store
-            .create_local_project(&LocalProject {
-                id: "proj_1".into(),
-                name: "Project".into(),
-                slug: "project".into(),
-                github_owner: String::new(),
-                github_repo: String::new(),
-                github_sync_enabled: false,
-                baseline_branch: "main".into(),
-                repo_path: dir.join("project").to_string_lossy().into_owned(),
-                project_dir: dir.join("project").to_string_lossy().into_owned(),
-                run_command: None,
-                paper_id: None,
-                created_at: 1,
-                updated_at: 1,
-            })
-            .unwrap();
+        for (id, slug) in [("proj_1", "project"), ("proj_2", "project-2")] {
+            store
+                .create_local_project(&LocalProject {
+                    id: id.into(),
+                    name: id.into(),
+                    slug: slug.into(),
+                    github_owner: String::new(),
+                    github_repo: String::new(),
+                    github_sync_enabled: false,
+                    baseline_branch: "main".into(),
+                    repo_path: dir.join(id).to_string_lossy().into_owned(),
+                    project_dir: dir.join(id).to_string_lossy().into_owned(),
+                    run_command: None,
+                    paper_id: None,
+                    created_at: 1,
+                    updated_at: 1,
+                })
+                .unwrap();
+        }
+        for (id, project_id) in [
+            ("g1", None),
+            ("g2", Some("proj_1")),
+            ("g3", Some("proj_1")),
+            ("g4", Some("proj_2")),
+        ] {
+            store
+                .create_prompt_gist(&prompt_gist_fixture(id, project_id))
+                .unwrap();
+        }
 
-        store
-            .create_prompt_gist(&prompt_gist_fixture("g1", None))
-            .unwrap();
-        store
-            .create_prompt_gist(&prompt_gist_fixture("g2", Some("proj_1")))
-            .unwrap();
-        store
-            .create_prompt_gist(&prompt_gist_fixture("g3", Some("proj_1")))
-            .unwrap();
+        // The global view is globals only, never another project's gists.
+        let globals = store.list_prompt_gists(None).unwrap();
+        assert_eq!(globals.len(), 1);
+        assert_eq!(globals[0].id, "g1");
+        assert_eq!(globals[0].project_id, None);
 
-        assert_eq!(store.list_prompt_gists(None).unwrap().len(), 3);
-        assert_eq!(store.list_prompt_gists(Some("proj_1")).unwrap().len(), 3);
-        assert_eq!(store.list_prompt_gists(Some("proj_2")).unwrap().len(), 1);
+        let proj_1 = store.list_prompt_gists(Some("proj_1")).unwrap();
+        assert_eq!(proj_1.len(), 3);
+        assert!(proj_1
+            .iter()
+            .all(|g| g.project_id.as_deref() != Some("proj_2")));
 
-        let g1 = store.get_prompt_gist("g1").unwrap().unwrap();
-        assert!(g1.project_id.is_none());
-        let g2 = store.get_prompt_gist("g2").unwrap().unwrap();
-        assert_eq!(g2.project_id.as_deref(), Some("proj_1"));
+        let proj_2 = store.list_prompt_gists(Some("proj_2")).unwrap();
+        assert_eq!(proj_2.len(), 2);
+        let mut ids: Vec<&str> = proj_2.iter().map(|g| g.id.as_str()).collect();
+        ids.sort_unstable();
+        assert_eq!(ids, vec!["g1", "g4"]);
+
+        assert!(store
+            .get_prompt_gist("g1")
+            .unwrap()
+            .unwrap()
+            .project_id
+            .is_none());
 
         let mut updated = prompt_gist_fixture("g2", Some("proj_1"));
         updated.name = "renamed".into();
@@ -5633,11 +5657,16 @@ mod tests {
         assert!(stored.updated_at > 1);
 
         assert!(store.delete_prompt_gist("g1").unwrap());
-        assert!(store.get_prompt_gist("g1").unwrap().is_none());
-        assert_eq!(store.list_prompt_gists(None).unwrap().len(), 2);
+        assert!(store.list_prompt_gists(None).unwrap().is_empty());
+        assert_eq!(store.list_prompt_gists(Some("proj_1")).unwrap().len(), 2);
 
+        // Deleting a project drops only its own gists; the other project's
+        // (and the, already deleted, global) rows are unaffected.
         store.delete_local_project("proj_1").unwrap();
-        assert_eq!(store.list_prompt_gists(None).unwrap().len(), 0);
+        assert!(store.list_prompt_gists(None).unwrap().is_empty());
+        let proj_2 = store.list_prompt_gists(Some("proj_2")).unwrap();
+        assert_eq!(proj_2.len(), 1);
+        assert_eq!(proj_2[0].id, "g4");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

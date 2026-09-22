@@ -845,6 +845,40 @@ mod tests {
         assert!(line.contains("explain"));
         assert!(line.contains("[help]"));
 
+        // A global gist is listed for every project; another project's is not.
+        store
+            .create_local_project(&LocalProject {
+                id: "other_project".into(),
+                slug: "other-project".into(),
+                ..project.clone()
+            })
+            .unwrap();
+        for (id, project_id, name) in [
+            ("gist_global", None, "global-snippet"),
+            (
+                "gist_other",
+                Some("other_project".to_string()),
+                "other-snippet",
+            ),
+        ] {
+            store
+                .create_prompt_gist(&crate::local::model::PromptGist {
+                    id: id.into(),
+                    project_id,
+                    name: name.into(),
+                    content: "body".into(),
+                    description: None,
+                    tags: vec![],
+                    created_at: 2,
+                    updated_at: 2,
+                })
+                .unwrap();
+        }
+        let line = prompt_gists_line(&project, &store);
+        assert!(line.contains("Prompt gists (2)"), "{line}");
+        assert!(line.contains("global-snippet"), "{line}");
+        assert!(!line.contains("other-snippet"), "{line}");
+
         let md = playbook_md(&project, &ProjectState::default(), &line, "");
         assert!(md.contains("Prompt gists"));
         assert!(md.contains("explain"));
