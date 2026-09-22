@@ -2,6 +2,7 @@ import { queryOptions, useMutation } from "@tanstack/react-query";
 import {
   deleteLibraryItem,
   getLibraryItem,
+  listChatAttachments,
   listLibraryItems,
   updateLibraryItem,
   createLibraryItem,
@@ -14,6 +15,13 @@ export const listLibraryItemsQuery = (kind?: LibraryKind, source: LibrarySource 
   queryOptions({
     queryKey: workspaceKey("listLibraryItems", kind ?? null, source),
     queryFn: ({ signal }) => listLibraryItems(kind, source, signal),
+    staleTime: 30_000,
+  });
+
+export const listChatAttachmentsQuery = () =>
+  queryOptions({
+    queryKey: workspaceKey("listChatAttachments"),
+    queryFn: ({ signal }) => listChatAttachments(signal),
     staleTime: 30_000,
   });
 

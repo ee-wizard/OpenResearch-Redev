@@ -1844,6 +1844,38 @@ export const deleteLibraryItem = (kind: LibraryKind, id: string, source: Library
     { method: "DELETE" },
   ).then((r) => json<{ deleted: boolean }>(r));
 
+// --- chat attachments ------------------------------------------------------
+
+export type ChatAttachmentSource = "builtin" | "team" | "user" | "mirrored" | "project";
+
+export interface ChatAttachmentSkill {
+  id: string;
+  name: string;
+  source: ChatAttachmentSource;
+  filePath: string;
+  description?: string;
+  contentPreview?: string;
+  scope?: string;
+  content?: string;
+}
+
+export interface ChatAttachmentAgent {
+  id: string;
+  name: string;
+  harnessId: string;
+  description?: string;
+  installed: boolean;
+  authenticated: boolean;
+}
+
+export interface ChatAttachments {
+  skills: ChatAttachmentSkill[];
+  agents: ChatAttachmentAgent[];
+}
+
+export const listChatAttachments = (signal?: AbortSignal) =>
+  get<ChatAttachments>("/api/chat/attachments", signal);
+
 /** "openai/gpt-5.5" → "GPT 5.5", "anthropic/claude-opus-4-8" → "Opus 4.8". */
 export function modelLabel(id: string): string {
   const last = (id.split("/").pop() ?? id).replace(/^~/, "").replace(/^claude-/, "");

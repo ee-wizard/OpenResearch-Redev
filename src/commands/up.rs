@@ -897,6 +897,7 @@ fn router(state: AppState, remote_auth: Option<RemoteAuth>) -> Router {
                 .patch(update_library_item)
                 .delete(delete_library_item),
         )
+        .route("/api/chat/attachments", get(list_chat_attachments))
         .route(
             "/api/chat/sessions",
             get(list_chat_sessions).post(create_chat_session),
@@ -1509,6 +1510,14 @@ async fn delete_library_item(
     .map_err(|e| ApiError::from(anyhow!("library task failed: {e}")))?
     .map_err(bad_request)?;
     Ok(Json(json!({ "deleted": deleted })))
+}
+
+/// Unified catalog for the chat composer picker: every insertable skill
+/// (built-in, team library, user-uploaded, mirrored from coding agents) plus
+/// every registered harness with its detected install/auth state.
+async fn list_chat_attachments() -> ApiResult {
+    let attachments = crate::local::chat::attachments::list_attachments().await?;
+    Ok(Json(json!(attachments)))
 }
 
 fn latex_template_json(t: &crate::local::latex_templates::LatexTemplate) -> Value {

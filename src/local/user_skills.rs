@@ -674,6 +674,37 @@ pub fn list_uploaded() -> Vec<UserSkill> {
     list_uploaded_in(&root())
 }
 
+/// Uploaded skills with the paths to their source folders.
+pub fn list_uploaded_with_paths() -> Vec<(UserSkill, PathBuf)> {
+    let root = root();
+    list_uploaded_in(&root)
+        .into_iter()
+        .map(|skill| {
+            let path = store_dir(&root).join(&skill.name);
+            (skill, path)
+        })
+        .collect()
+}
+
+/// Mirrored coding-agent skills with the paths to their source folders.
+pub fn list_mirrored_with_paths() -> Vec<(UserSkill, PathBuf)> {
+    let mut out = Vec::new();
+    for skill in mirrored() {
+        let tally = tally_all(&skill.dir);
+        let user_skill = UserSkill {
+            name: skill.name.clone(),
+            description: skill.description.clone(),
+            origin: Some(skill.origin.clone()),
+            plugin: skill.plugin.then(|| skill.origin.clone()),
+            bytes: tally.bytes,
+            updated_at: mtime_ms(&skill.dir.join("SKILL.md")),
+        };
+        out.push((user_skill, skill.dir.clone()));
+    }
+    out.sort_by(|a, b| a.0.name.cmp(&b.0.name));
+    out
+}
+
 fn list_in(root: &Path, mirrored: &[Mirrored]) -> Vec<UserSkill> {
     let mut out = list_uploaded_in(root);
     for m in mirrored {

@@ -2,6 +2,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 
 import { listUserSkillsQuery, listLatexTemplatesQuery } from "../queries/settings";
 import {
+  listChatAttachmentsQuery,
   listLibraryItemsQuery,
   getLibraryItemQuery,
   useCreateLibraryItem,
@@ -11,21 +12,21 @@ import {
 import { m } from "../paraglide/messages.js";
 import { ltr } from "../i18n";
 import { RefreshCw, Trash2, Upload, Bot, WandSparkles, FileText, Plus } from "lucide-react";
-import { useCallback, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import {
   deleteLatexTemplate,
   deleteUserSkill,
   fmtBytes,
   fmtNumber,
-  getLibraryItem,
   timeAgo,
   uploadLatexTemplate,
   uploadUserSkill,
+  type ChatAttachmentSkill,
+  type ChatAttachmentSource,
   type LatexTemplate,
   type UserSkill,
   type LibraryItem,
   type LibraryKind,
-  type LibrarySource,
 } from "../api";
 import { Badge, Button, IconButton, Input, Spinner } from "./ui";
 import { usePopover } from "./ModelPicker";
@@ -428,7 +429,7 @@ function LatexTemplatesCard() {
   );
 }
 
-function sourceBadge(source: LibrarySource) {
+function sourceBadge(source: string) {
   switch (source) {
     case "builtin":
       return <Badge size="small">{m.library_built_in()}</Badge>;
@@ -440,6 +441,10 @@ function sourceBadge(source: LibrarySource) {
       );
     case "project":
       return <Badge size="small">{m.library_project()}</Badge>;
+    case "user":
+      return <Badge size="small" variant="primary">User</Badge>;
+    case "mirrored":
+      return <Badge size="small">Mirrored</Badge>;
   }
 }
 
@@ -696,6 +701,22 @@ function LibrarySection({
   );
 }
 
+const SKILL_SOURCE_ORDER: ChatAttachmentSource[] = [
+  "builtin",
+  "team",
+  "user",
+  "mirrored",
+  "project",
+];
+
+const SKILL_SOURCE_LABELS: Record<ChatAttachmentSource, string> = {
+  builtin: m.library_built_in(),
+  team: m.library_team(),
+  user: "User/Uploaded",
+  mirrored: "Mirrored",
+  project: m.library_project(),
+};
+
 /** Composer picker that inserts a skill's content or an agent marker. */
 export function LibraryPicker({
   textareaRef,
@@ -708,10 +729,21 @@ export function LibraryPicker({
 }) {
   const triggerRef = useRef<HTMLButtonElement>(null);
   const { open, setOpen, ref } = usePopover(triggerRef);
-  const skillsQuery = useQuery(listLibraryItemsQuery("skill"));
-  const agentsQuery = useQuery(listLibraryItemsQuery("agent"));
-  const skills = skillsQuery.data ?? [];
-  const agents = agentsQuery.data ?? [];
+  const attachmentsQuery = useQuery(listChatAttachmentsQuery());
+  const skills = attachmentsQuery.data?.skills ?? [];
+  const agents = attachmentsQuery.data?.agents ?? [];
+
+  const groupedSkills = useMemo(() => {
+    const bySource = new Map<ChatAttachmentSource, ChatAttachmentSkill[]>();
+    for (const skill of skills) {
+      const list = bySource.get(skill.source) ?? [];
+      list.push(skill);
+      bySource.set(skill.source, list);
+    }
+    return SKILL_SOURCE_ORDER.filter((source) => bySource.has(source)).map(
+      (source) => [source, bySource.get(source)!] as const,
+    );
+  }, [skills]);
 
   const insert = useCallback(
     (value: string) => {
@@ -750,9 +782,9 @@ export function LibraryPicker({
         <WandSparkles size={16} />
       </IconButton>
       {open && (
-        <div className="composer-sources-menu absolute bottom-[calc(100%_+_8px)] start-0 z-50 flex min-w-64 max-h-[min(24rem,60vh)] flex-col gap-1 rounded-md border border-border bg-background p-2 shadow-dropdown overflow-y-auto">
+        <div className="composer-sources-menu absolute bottom-[calc(100%_+_8px)] start-0 z-50 flex min-w-80 max-h-[min(24rem,60vh)] flex-col gap-1 rounded-md border border-border bg-background p-2 shadow-dropdown overflow-y-auto">
           <span className="px-1 text-sm font-medium text-muted">{m.library_insert()}</span>
-          {skillsQuery.isPending || agentsQuery.isPending ? (
+          {attachmentsQuery.isPending ? (
             <div className="flex items-center gap-2 px-1 py-2 text-subtext text-sm">
               <Spinner />
               {m.common_loading()}
@@ -761,36 +793,43 @@ export function LibraryPicker({
             <div className="px-1 py-2 text-sm text-subtext">{m.library_empty()}</div>
           ) : (
             <>
-              {skills.map((item) => (
-                <button
-                  key={`skill-${item.id}`}
-                  type="button"
-                  className="flex items-center gap-2 rounded-md px-2 py-1.5 text-start hover:bg-surface"
-                  onClick={async () => {
-                    try {
-                      const { content } = await getLibraryItem(item.kind, item.id, item.source);
-                      insert(content);
-                    } catch (e) {
-                      insert(`@${item.id}`);
-                    }
-                  }}
-                >
-                  <WandSparkles size={14} />
-                  <span className="text-sm text-text">{item.name}</span>
-                  {sourceBadge(item.source)}
-                </button>
-              ))}
-              {agents.map((item) => (
-                <button
-                  key={`agent-${item.id}`}
-                  type="button"
-                  className="flex items-center gap-2 rounded-md px-2 py-1.5 text-start hover:bg-surface"
-                  onClick={() => insert(`@${item.id}`)}
-                >
-                  <Bot size={14} />
-                  <span className="text-sm text-text">{item.name}</span>
-                  {sourceBadge(item.source)}
-                </button>
+              {agents.length > 0 && (
+                <div className="flex flex-col gap-1">
+                  <span className="px-1 text-xs font-medium text-muted">{m.library_agents()}</span>
+                  {agents.map((agent) => (
+                    <button
+                      key={`agent-${agent.id}`}
+                      type="button"
+                      className="flex items-center gap-2 rounded-md px-2 py-1.5 text-start hover:bg-surface"
+                      onClick={() => insert(`@${agent.id}`)}
+                      title={agent.installed ? `${agent.name} — installed` : `${agent.name} — not installed`}
+                    >
+                      <Bot size={14} />
+                      <span className="text-sm text-text">{agent.name}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+              {groupedSkills.map(([source, items]) => (
+                <div key={`source-${source}`} className="flex flex-col gap-1">
+                  <span className="px-1 text-xs font-medium text-muted">{SKILL_SOURCE_LABELS[source]}</span>
+                  {items.map((skill) => (
+                    <button
+                      key={`skill-${skill.id}`}
+                      type="button"
+                      className="flex items-start gap-2 rounded-md px-2 py-1.5 text-start hover:bg-surface"
+                      onClick={() => insert(skill.content ?? `/${skill.id}`)}
+                      title={skill.filePath}
+                    >
+                      <WandSparkles size={14} className="mt-0.5 shrink-0" />
+                      <div className="flex min-w-0 flex-col items-start">
+                        <span className="text-sm text-text">{skill.name}</span>
+                        <span className="max-w-full truncate text-xs text-subtext">{skill.filePath}</span>
+                      </div>
+                      {sourceBadge(skill.source)}
+                    </button>
+                  ))}
+                </div>
               ))}
             </>
           )}
