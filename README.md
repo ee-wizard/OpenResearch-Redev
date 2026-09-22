@@ -55,8 +55,8 @@ Build and run OpenResearch from source.
 ### Prerequisites
 
 - [Rust](https://www.rust-lang.org/tools/install) (stable) with `rustfmt` and `clippy`
-- [Node.js](https://nodejs.org/) 22
-- [pnpm](https://pnpm.io/installation) 10
+- [Node.js](https://nodejs.org/) 22 or newer (CI pins 22)
+- [pnpm](https://pnpm.io/installation) 10 or newer (CI pins 10)
 
 ### UI setup
 
