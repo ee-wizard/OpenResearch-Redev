@@ -1,7 +1,10 @@
+import { clsx, type ClassValue } from "clsx";
 import { extendTailwindMerge } from "tailwind-merge";
 
-const twMerge = extendTailwindMerge({ extend: { theme: { text: ["menu"] } } });
+const twMerge = extendTailwindMerge({
+  extend: { theme: { text: ["menu"] } },
+});
 
-export function cn(...classes: Array<string | false | null | undefined>) {
-  return twMerge(...classes);
+export function cn(...inputs: ClassValue[]) {
+  return twMerge(clsx(inputs));
 }

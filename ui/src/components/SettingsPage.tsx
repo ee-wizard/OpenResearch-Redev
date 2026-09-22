@@ -145,7 +145,7 @@ import {
 const SETTINGS_CARD_CLASS_NAME = [
   "settings-card [&_>_.error]:text-accent-red [&_>_.error]:text-base",
   "[&_>_.error]:whitespace-pre-wrap bg-background border border-border",
-  "rounded-lg py-4 px-4.5 mb-4 [&_h3]:mt-0 [&_h3]:mx-0 [&_h3]:mb-2.5",
+  "rounded-2xl shadow-card py-4 px-4.5 mb-4 [&_h3]:mt-0 [&_h3]:mx-0 [&_h3]:mb-2.5",
   "[&_h3]:text-base [&_h3]:font-semibold [&_h3]:text-text",
   "[&_.settings-sub]:mb-3 [&_.kv]:gap-y-1.5 [&_.kv]:gap-x-4.5",
   "[&_>_.project-default-row:first-child]:pt-0 [&_>_.project-default-row:first-child]:border-t-0",
@@ -169,7 +169,7 @@ const COMPUTE_DIAGNOSTIC_CLASS_NAME =
 
 const SETTINGS_NOTE_CLASS_NAME = [
   "settings-note mt-2.5 mx-0 mb-0 text-base py-2 px-2.5",
-  "border border-accent-amber rounded-md bg-accent-amber-subtle",
+  "border border-accent-amber rounded-xl bg-accent-amber-subtle",
   "text-accent-amber font-medium",
 ].join(" ");
 
@@ -183,7 +183,7 @@ const FORM_CLASS_NAME = [
   "[&_.folder-picker-control]:min-w-0 [&_.folder-picker-control]:py-2 [&_.folder-picker-control]:px-2.5",
   "[&_.folder-picker-control]:overflow-hidden [&_.folder-picker-control]:bg-background",
   "[&_.folder-picker-control]:border [&_.folder-picker-control]:border-border",
-  "[&_.folder-picker-control]:rounded-md [&_.folder-picker-control]:cursor-pointer",
+  "[&_.folder-picker-control]:rounded-xl [&_.folder-picker-control]:cursor-pointer",
   "[&_.folder-picker-control]:text-start",
   "[&_.folder-picker-control]:transition-[border-color,box-shadow] [&_.folder-picker-control]:duration-120 [&_.folder-picker-control]:ease-standard",
   "[&_.folder-picker-control:hover:not(:disabled)]:border-muted",

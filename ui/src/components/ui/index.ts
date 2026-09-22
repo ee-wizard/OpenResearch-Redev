@@ -1,6 +1,8 @@
 export { Badge } from "./Badge";
 export type { BadgeVariant } from "./Badge";
 export { Button, ButtonLink } from "./Button";
+export { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "./Card";
+export type { CardProps } from "./Card";
 export { IconButton, IconButtonLink } from "./IconButton";
 export { Input } from "./Input";
 export type { InputProps } from "./Input";
@@ -9,6 +11,7 @@ export { LoadingRow, Spinner } from "./Spinner";
 export { StatusIndicator } from "./StatusIndicator";
 export type { StatusTone } from "./StatusIndicator";
 export { Switch, SwitchIndicator } from "./Switch";
+export { Tabs, TabsList, TabsTrigger, TabsContent } from "./Tabs";
 export { showAlert, Toaster } from "./Toast";
 export type { ToastVariant } from "./Toast";
 export { Tooltip } from "./Tooltip";

@@ -14,7 +14,8 @@ import {
 } from "../api";
 
 import { NewProjectForm } from "./NewProjectForm";
-import { Button } from "./ui";
+import { Button, Card } from "./ui";
+import { StaggerList, StaggerItem } from "./rare-ui";
 
 export function NewProjectDialog({
   onClose,
@@ -90,7 +91,7 @@ export function NewProjectDialog({
     >
       <div
         ref={dialogRef}
-        className="modal w-120 max-w-full max-h-[calc(100vh_-_var(--new-project-modal-top)_-_1.25rem)] overflow-y-auto bg-background border border-border rounded-xl shadow-modal p-6 [&_h2]:mt-0 [&_h2]:mx-0 [&_h2]:mb-3.5 [&_h2]:text-xl [&_h2]:font-medium"
+        className="modal w-120 max-w-full max-h-[calc(100vh_-_var(--new-project-modal-top)_-_1.25rem)] overflow-y-auto bg-background border border-border rounded-2xl shadow-modal p-6 [&_h2]:mt-0 [&_h2]:mx-0 [&_h2]:mb-3.5 [&_h2]:text-xl [&_h2]:font-medium"
         role="dialog"
         aria-modal="true"
         aria-labelledby="new-project-dialog-title"
@@ -174,7 +175,7 @@ function DeleteProjectDialog({
     >
       <div
         ref={dialogRef}
-        className="modal w-110 max-w-full bg-background border border-border rounded-xl shadow-modal p-6"
+        className="modal w-110 max-w-full bg-background border border-border rounded-2xl shadow-modal p-6"
         role="dialog"
         aria-modal="true"
         aria-labelledby="delete-project-dialog-title"
@@ -254,7 +255,7 @@ export function ProjectsHome({
             <Plus size={15} /> {m.projects_home_new_project()}
           </Button>
         </div>
-        <div className="home-list overflow-hidden rounded-lg border border-border bg-background">
+        <Card variant="default" padding="none" className="home-list overflow-hidden">
           <div>
             <div className="grid grid-cols-[minmax(0,1fr)_9rem_9rem_minmax(18rem,max-content)] items-center gap-3 border-b border-border bg-background py-2.5 ps-4 pe-2 text-xs font-medium tracking-[0.06em] text-text uppercase [@media((max-width:_960px))]:hidden">
               <span>{m.projects_home_project()}</span>
@@ -265,7 +266,8 @@ export function ProjectsHome({
             {projects.length === 0 ? (
               <div className="py-8 px-4 text-sm text-muted">{m.projects_home_no_projects_yet_create_one_to_get_started()}</div>
             ) : (
-              [...projects].sort((a, b) => {
+              <StaggerList className="contents">
+              {[...projects].sort((a, b) => {
                 const aActivity = activityByProject[a.id]?.lastMessageAt ?? a.createdAt;
                 const bActivity = activityByProject[b.id]?.lastMessageAt ?? b.createdAt;
                 return bActivity - aActivity || a.name.localeCompare(b.name);
@@ -305,7 +307,7 @@ export function ProjectsHome({
                     ? m.projects_total_count({ count: fmtNumber(summary.totalExperiments) })
                     : null;
                 return (
-                  <div
+                  <StaggerItem
                     key={p.id}
                     className="group project-row relative grid cursor-pointer grid-cols-[minmax(0,1fr)_9rem_9rem_minmax(18rem,max-content)] items-center gap-3 border-b border-border-variant py-4 ps-4 pe-2 text-start transition-colors duration-120 ease-standard last:border-b-0 hover:bg-surface-bright focus-within:bg-surface-bright [@media((max-width:_960px))]:grid-cols-[minmax(0,0.8fr)_minmax(0,0.8fr)_minmax(0,1.4fr)] [@media((max-width:_960px))]:items-start [@media((max-width:_960px))]:gap-x-4 [@media((max-width:_960px))]:gap-y-3 [@media((max-width:_960px))]:py-4 [@media((max-width:_960px))]:px-4 [@media((max-width:_600px))]:grid-cols-2"
                   >
@@ -372,12 +374,13 @@ export function ProjectsHome({
                         <span className="text-sm text-text pointer-events-none">{githubState}</span>
                       )}
                     </div>
-                  </div>
+                  </StaggerItem>
                 );
-              })
+              })}
+              </StaggerList>
             )}
           </div>
-        </div>
+        </Card>
       </div>
 
       {modalOpen && (
