@@ -913,6 +913,10 @@ fn router(state: AppState, remote_auth: Option<RemoteAuth>) -> Router {
                 .patch(update_library_item)
                 .delete(delete_library_item),
         )
+        .route(
+            "/api/library/{kind}/{id}/files",
+            post(create_library_file).delete(delete_library_file),
+        )
         .route("/api/handbook", get(list_handbook).post(create_handbook))
         .route(
             "/api/handbook/{id}",
@@ -1398,6 +1402,19 @@ struct LibraryQ {
 #[derive(Deserialize)]
 struct LibrarySourceQ {
     source: Option<String>,
+    /// A file inside the item's folder, relative to it. Omitted means the
+    /// item's entry-point file (`SKILL.md`, or `shim.md` for agent shims).
+    path: Option<String>,
+}
+
+/// The source a library request addresses; team-owned items when it names none.
+fn library_source(
+    source: Option<&str>,
+) -> std::result::Result<crate::local::library::LibrarySource, ApiError> {
+    match source {
+        Some(source) => parse_library_source(source),
+        None => Ok(crate::local::library::LibrarySource::Team),
+    }
 }
 
 fn parse_library_kind(
@@ -1424,11 +1441,7 @@ fn parse_library_source(
 
 async fn list_library(Query(q): Query<LibraryQ>) -> ApiResult {
     let kind = q.kind.as_deref().map(parse_library_kind).transpose()?;
-    let source = q
-        .source
-        .as_deref()
-        .map(parse_library_source)
-        .unwrap_or(Ok(crate::local::library::LibrarySource::Team))?;
+    let source = library_source(q.source.as_deref())?;
     let items = tokio::task::spawn_blocking(move || {
         crate::local::library::list_library_items(kind, source)
     })
@@ -1442,32 +1455,35 @@ async fn get_library_item_endpoint(
     Query(q): Query<LibrarySourceQ>,
 ) -> ApiResult {
     let kind = parse_library_kind(&kind)?;
-    let source = q
-        .source
-        .as_deref()
-        .map(parse_library_source)
-        .unwrap_or(Ok(crate::local::library::LibrarySource::Team))?;
-    let item = tokio::task::spawn_blocking(move || {
-        crate::local::library::get_library_item(kind, &id, source)
-    })
-    .await
-    .map_err(|e| ApiError::from(anyhow!("library task failed: {e}")))?
-    .map_err(bad_request)?
-    .ok_or_else(|| not_found("library item"))?;
-    let item_for_read = item.clone();
-    let content = tokio::task::spawn_blocking(move || {
-        crate::local::library::read_library_content(&item_for_read)
+    let source = library_source(q.source.as_deref())?;
+    let rel = q.path.clone();
+    let (item, read) = tokio::task::spawn_blocking(move || {
+        let item = crate::local::library::get_library_item(kind, &id, source)
+            .map_err(bad_request)?
+            .ok_or_else(|| not_found("library item"))?;
+        let read = crate::local::library::read_library_file(&item, rel.as_deref())
+            .map_err(bad_request)?
+            .ok_or_else(|| not_found("library file"))?;
+        Ok::<_, ApiError>((item, read))
     })
     .await
     .map_err(|e| ApiError::from(anyhow!("library task failed: {e}")))??;
-    Ok(Json(json!({ "item": item, "content": content })))
+    let (path, content) = read;
+    Ok(Json(
+        json!({ "item": item, "path": path, "content": content }),
+    ))
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CreateLibraryItemReq {
     name: String,
-    content: String,
+    /// Inline entry-point content — the shape a one-file skill or shim uses.
+    content: Option<String>,
+    /// Original upload filename; an archive's name decides the folder shape.
+    filename: Option<String>,
+    /// The archive bytes, base64 (same convention as skill uploads).
+    content_base64: Option<String>,
 }
 
 async fn create_library_item(
@@ -1479,8 +1495,28 @@ async fn create_library_item(
     if name.is_empty() {
         return Err(bad_request("name is required"));
     }
-    let item = tokio::task::spawn_blocking(move || {
-        crate::local::library::create_team_library_item(kind, &name, &req.content)
+    let archive = match req.filename.as_deref() {
+        Some(filename) if is_zip_filename(filename) => {
+            let encoded = req
+                .content_base64
+                .as_deref()
+                .ok_or_else(|| bad_request("contentBase64 is required for a .zip upload"))?;
+            Some(decode_upload(encoded)?)
+        }
+        _ => None,
+    };
+    let content = req.content;
+    let item = tokio::task::spawn_blocking(move || match archive {
+        // A zip carries a whole folder: SKILL.md beside its references, scripts,
+        // and assets. Its size is the request's business, not the item's.
+        Some(bytes) => {
+            crate::local::library::create_team_library_item_from_zip(kind, &name, &bytes)
+        }
+        None => {
+            let content =
+                content.ok_or_else(|| anyhow!("content is required for a single-file item"))?;
+            crate::local::library::create_team_library_item(kind, &name, &content)
+        }
     })
     .await
     .map_err(|e| ApiError::from(anyhow!("library task failed: {e}")))?
@@ -1488,9 +1524,31 @@ async fn create_library_item(
     Ok(Json(json!({ "item": item })))
 }
 
+/// Whether an upload filename names a `.zip` archive.
+fn is_zip_filename(filename: &str) -> bool {
+    std::path::Path::new(filename)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("zip"))
+}
+
+/// Decode an upload's base64 payload, tolerating a `data:` URL prefix.
+fn decode_upload(encoded: &str) -> std::result::Result<Vec<u8>, ApiError> {
+    let payload = encoded
+        .rsplit_once(";base64,")
+        .map(|(_, payload)| payload)
+        .unwrap_or(encoded);
+    base64::engine::general_purpose::STANDARD
+        .decode(payload.trim())
+        .map_err(|e| bad_request(format!("invalid file data: {e}")))
+}
+
 #[derive(Deserialize)]
 struct UpdateLibraryItemReq {
     content: String,
+    /// A file inside the item's folder; omitted means its entry-point file, so
+    /// clients that never knew about folders keep working.
+    path: Option<String>,
 }
 
 async fn update_library_item(
@@ -1499,18 +1557,82 @@ async fn update_library_item(
     Json(req): Json<UpdateLibraryItemReq>,
 ) -> ApiResult {
     let kind = parse_library_kind(&kind)?;
-    let source = q
-        .source
-        .as_deref()
-        .map(parse_library_source)
-        .unwrap_or(Ok(crate::local::library::LibrarySource::Team))?;
-    let path = tokio::task::spawn_blocking(move || {
-        crate::local::library::write_library_content(kind, &id, source, &req.content)
+    let source = library_source(q.source.as_deref())?;
+    let path = req.path.clone();
+    let content = req.content;
+    let outcome = tokio::task::spawn_blocking(move || {
+        crate::local::library::write_library_file(kind, &id, source, path.as_deref(), &content)
     })
     .await
     .map_err(|e| ApiError::from(anyhow!("library task failed: {e}")))?
     .map_err(bad_request)?;
-    Ok(Json(json!({ "path": path })))
+    file_op_response(outcome)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateLibraryFileReq {
+    path: String,
+    content: String,
+}
+
+async fn create_library_file(
+    Path((kind, id)): Path<(String, String)>,
+    Query(q): Query<LibrarySourceQ>,
+    Json(req): Json<CreateLibraryFileReq>,
+) -> ApiResult {
+    let kind = parse_library_kind(&kind)?;
+    let source = library_source(q.source.as_deref())?;
+    let outcome = tokio::task::spawn_blocking(move || {
+        crate::local::library::create_library_file(kind, &id, source, &req.path, &req.content)
+    })
+    .await
+    .map_err(|e| ApiError::from(anyhow!("library task failed: {e}")))?
+    .map_err(bad_request)?;
+    file_op_response(outcome)
+}
+
+async fn delete_library_file(
+    Path((kind, id)): Path<(String, String)>,
+    Query(q): Query<LibrarySourceQ>,
+) -> ApiResult {
+    let kind = parse_library_kind(&kind)?;
+    let source = library_source(q.source.as_deref())?;
+    let Some(path) = q.path.filter(|path| !path.is_empty()) else {
+        return Err(bad_request("path is required"));
+    };
+    let outcome = tokio::task::spawn_blocking(move || {
+        crate::local::library::delete_library_file(kind, &id, source, &path)
+    })
+    .await
+    .map_err(|e| ApiError::from(anyhow!("library task failed: {e}")))?
+    .map_err(bad_request)?;
+    match outcome {
+        crate::local::library::FileOp::Done(_) => Ok(Json(json!({ "ok": true }))),
+        crate::local::library::FileOp::Missing | crate::local::library::FileOp::Conflict => {
+            Err(not_found("library file"))
+        }
+    }
+}
+
+/// What a successful file write answers: the path the caller asked for,
+/// relative to the item's folder, and that folder.
+fn file_json(file: &crate::local::library::ItemFile) -> Value {
+    json!({ "path": file.path, "dirPath": file.dir })
+}
+
+/// Turn a write outcome into its response, or the status a miss deserves.
+fn file_op_response(
+    outcome: crate::local::library::FileOp,
+) -> std::result::Result<Json<Value>, ApiError> {
+    match outcome {
+        crate::local::library::FileOp::Done(file) => Ok(Json(file_json(&file))),
+        crate::local::library::FileOp::Missing => Err(not_found("library file")),
+        crate::local::library::FileOp::Conflict => Err(ApiError(
+            StatusCode::CONFLICT,
+            "a file already exists at that path".into(),
+        )),
+    }
 }
 
 async fn delete_library_item(
@@ -1518,11 +1640,7 @@ async fn delete_library_item(
     Query(q): Query<LibrarySourceQ>,
 ) -> ApiResult {
     let kind = parse_library_kind(&kind)?;
-    let source = q
-        .source
-        .as_deref()
-        .map(parse_library_source)
-        .unwrap_or(Ok(crate::local::library::LibrarySource::Team))?;
+    let source = library_source(q.source.as_deref())?;
     if source != crate::local::library::LibrarySource::Team
         && source != crate::local::library::LibrarySource::Supervisor
     {

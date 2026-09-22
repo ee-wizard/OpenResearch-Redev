@@ -40,7 +40,22 @@ pub enum LibrarySource {
     Supervisor,
 }
 
+/// One file inside a library item's folder, as listed to the UI.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryFile {
+    /// Path relative to the item's folder, `/`-separated.
+    pub path: String,
+    pub bytes: u64,
+}
+
 /// One item in the team library.
+///
+/// A skill *is* a folder: its `SKILL.md` plus whatever references, scripts, and
+/// assets it ships. [`LibraryItem::file_path`] stays the item's entry point for
+/// callers that only ever wanted that one file, while
+/// [`LibraryItem::dir_path`] and [`LibraryItem::files`] expose the folder the
+/// API browses and edits.
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LibraryItem {
@@ -48,27 +63,123 @@ pub struct LibraryItem {
     pub kind: LibraryKind,
     pub name: String,
     pub source: LibrarySource,
+    /// The item's entry-point file: `SKILL.md`, or `shim.md` for agent shims.
     pub file_path: PathBuf,
+    /// The item's folder — the unit the library actually stores.
+    pub dir_path: PathBuf,
+    /// Every regular file in the folder, entry point first, then by path.
+    pub files: Vec<LibraryFile>,
     pub editable: bool,
 }
 
 impl LibraryItem {
+    /// The file that makes an item an item — the one file that may never be
+    /// deleted, and the default target of a read or write that names none.
+    fn primary_file(kind: LibraryKind) -> &'static str {
+        match kind {
+            LibraryKind::Skill => "SKILL.md",
+            LibraryKind::Agent => "shim.md",
+        }
+    }
+
+    /// The entry-point file's path relative to the item's folder.
+    pub fn primary_path(&self) -> &'static str {
+        Self::primary_file(self.kind)
+    }
+
     fn new(
         id: String,
         kind: LibraryKind,
         name: String,
         source: LibrarySource,
-        file_path: PathBuf,
+        dir: PathBuf,
     ) -> Self {
+        let primary = Self::primary_file(kind);
+        let file_path = dir.join(primary);
+        let files = list_item_files(&dir, primary);
         Self {
             id,
             kind,
             name,
             source,
             file_path,
+            dir_path: dir,
+            files,
             editable: source != LibrarySource::Project,
         }
     }
+}
+
+/// A file inside an item's folder, as an operation touched it.
+#[derive(Clone, Debug)]
+pub struct ItemFile {
+    /// Path relative to the item's folder, `/`-separated.
+    pub path: String,
+    /// The file's absolute path.
+    pub absolute: PathBuf,
+    /// The item's folder.
+    pub dir: PathBuf,
+}
+
+/// Outcome of writing, creating, or deleting one file of an item, so the API can
+/// answer 200/404/409 without parsing messages.
+#[derive(Clone, Debug)]
+pub enum FileOp {
+    /// The operation succeeded.
+    Done(ItemFile),
+    /// There is no such file.
+    Missing,
+    /// A file already exists where the caller asked to create one.
+    Conflict,
+}
+
+/// Every regular file under `dir`, `/`-separated and relative to it, with the
+/// entry point first and the rest sorted by path.
+///
+/// Symlinks are skipped rather than followed: an item folder can be a cloned
+/// repository, and a link that leaves the folder would never be served anyway —
+/// [`validate_item_file_path`] refuses it. Iterative, so a deep tree cannot
+/// overflow the stack.
+fn list_item_files(dir: &Path, primary: &str) -> Vec<LibraryFile> {
+    let mut files = Vec::new();
+    let mut pending = vec![dir.to_path_buf()];
+    while let Some(current) = pending.pop() {
+        let Ok(entries) = std::fs::read_dir(&current) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            // `file_type` never follows links, so a symlink is neither walked
+            // into nor listed.
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            let path = entry.path();
+            if file_type.is_dir() {
+                pending.push(path);
+            } else if file_type.is_file() {
+                let Ok(relative) = path.strip_prefix(dir) else {
+                    continue;
+                };
+                let Ok(bytes) = entry.metadata().map(|md| md.len()) else {
+                    continue;
+                };
+                files.push(LibraryFile {
+                    path: slash_path(relative),
+                    bytes,
+                });
+            }
+        }
+    }
+    files.sort_by(|a, b| (a.path != primary, &a.path).cmp(&(b.path != primary, &b.path)));
+    files
+}
+
+/// A path as the API spells it: `/`-separated, whatever the platform uses.
+fn slash_path(path: &Path) -> String {
+    path.components()
+        .map(|part| part.as_os_str().to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 /// `<data_dir>/library`
@@ -88,13 +199,18 @@ fn ensure_skills_library() -> Result<()> {
     for skill in skills(SkillSet::Full) {
         let dir = base.join(skill.name);
         let path = dir.join("SKILL.md");
-        if path.exists() {
-            continue;
+        // The entry point is seeded once and then owned by the team: it is never
+        // overwritten. Its resources are seeded one by one, so an install that
+        // predates a resource still receives it.
+        if !path.exists() {
+            std::fs::create_dir_all(&dir)?;
+            std::fs::write(&path, skill.content)?;
         }
-        std::fs::create_dir_all(&dir)?;
-        std::fs::write(&path, skill.content)?;
         for resource in skill.resources {
             let resource_path = dir.join(resource.path);
+            if resource_path.exists() {
+                continue;
+            }
             if let Some(parent) = resource_path.parent() {
                 std::fs::create_dir_all(parent)?;
             }
@@ -245,57 +361,148 @@ pub fn get_library_item(
     }
 }
 
-/// Read the content of a library item.
+/// Read the content of a library item's entry-point file.
 pub fn read_library_content(item: &LibraryItem) -> Result<String> {
-    std::fs::read_to_string(&item.file_path)
-        .map_err(|e| anyhow!("Could not read {}: {}", item.file_path.display(), e))
+    read_library_file(item, None)?
+        .map(|(_, content)| content)
+        .ok_or_else(|| anyhow!("Could not read {}", item.file_path.display()))
 }
 
-/// Write content to a library item, creating parent directories as needed.
-/// Built-in edits update the editable copy in the data dir.
+/// Read one file of an item's folder, as `(relative path, content)`. `path` is
+/// relative to the folder and defaults to the entry point; an empty `path` is
+/// the default too. `Ok(None)` means there is no such file, which the API
+/// answers with 404.
+pub fn read_library_file(
+    item: &LibraryItem,
+    path: Option<&str>,
+) -> Result<Option<(String, String)>> {
+    let rel = item_file_rel(item, path);
+    let file = validate_item_file_path(&item.dir_path, &rel)?;
+    if !file.is_file() {
+        return Ok(None);
+    }
+    let content = std::fs::read_to_string(&file)
+        .map_err(|e| anyhow!("Could not read {}: {e}", file.display()))?;
+    Ok(Some((rel, content)))
+}
+
+/// Write content to a library item's entry-point file, creating parent
+/// directories as needed. Built-in edits update the editable copy in the data
+/// dir.
 pub fn write_library_content(
     kind: LibraryKind,
     id: &str,
     source: LibrarySource,
     content: &str,
 ) -> Result<PathBuf> {
-    ensure_team_library()?;
-    validate_item_id(id)?;
-    let path = match (kind, source) {
-        (LibraryKind::Skill, LibrarySource::BuiltIn) => {
-            library_dir().join("skills").join(id).join("SKILL.md")
-        }
-        (LibraryKind::Skill, LibrarySource::Team) => library_dir()
-            .join("skills")
-            .join("team")
-            .join(id)
-            .join("SKILL.md"),
-        (LibraryKind::Skill, LibrarySource::Supervisor) => {
-            supervisor_skills_base().join(id).join("SKILL.md")
-        }
-        (LibraryKind::Agent, LibrarySource::BuiltIn) => {
-            library_dir().join("agents").join(id).join("shim.md")
-        }
-        (LibraryKind::Agent, LibrarySource::Team) => {
-            library_dir().join("agents").join(id).join("shim.md")
-        }
-        (_, LibrarySource::Project) => {
-            return Err(anyhow!(
-                "Project-scoped library items are not editable here"
-            ))
-        }
-        (LibraryKind::Agent, LibrarySource::Supervisor) => {
-            return Err(anyhow!("Supervisor source only supports skills"))
-        }
-    };
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+    match write_library_file(kind, id, source, None, content)? {
+        // Naming no file always writes the entry point, so it cannot go missing.
+        FileOp::Done(file) => Ok(file.absolute),
+        FileOp::Missing | FileOp::Conflict => Err(anyhow!("Could not write library item {id}")),
     }
-    std::fs::write(&path, content)?;
-    Ok(path)
 }
 
-/// Create a new team-owned library item.
+/// Replace the content of one file of an item's folder. Naming no `path` writes
+/// the entry point, exactly as this always did.
+///
+/// An explicit `path` must already be a file: creating one is
+/// [`create_library_file`]'s job, so a typo cannot silently fork the item.
+pub fn write_library_file(
+    kind: LibraryKind,
+    id: &str,
+    source: LibrarySource,
+    path: Option<&str>,
+    content: &str,
+) -> Result<FileOp> {
+    ensure_team_library()?;
+    validate_item_id(id)?;
+    let dir = item_dir(kind, id, source).ok_or_else(|| not_editable(source))?;
+    match path.filter(|path| !path.is_empty()) {
+        Some(rel) => {
+            let file = validate_item_file_path(&dir, rel)?;
+            if !file.is_file() {
+                return Ok(FileOp::Missing);
+            }
+            std::fs::write(&file, content)?;
+            Ok(FileOp::Done(item_file(&dir, rel, file)))
+        }
+        None => {
+            let rel = LibraryItem::primary_file(kind);
+            let file = dir.join(rel);
+            if let Some(parent) = file.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(&file, content)?;
+            Ok(FileOp::Done(item_file(&dir, rel, file)))
+        }
+    }
+}
+
+/// Create a new file inside an item's folder, creating parent directories. A
+/// file already at the path is a conflict — updating it is
+/// [`write_library_file`]'s job.
+pub fn create_library_file(
+    kind: LibraryKind,
+    id: &str,
+    source: LibrarySource,
+    path: &str,
+    content: &str,
+) -> Result<FileOp> {
+    ensure_team_library()?;
+    validate_item_id(id)?;
+    let dir = item_dir(kind, id, source).ok_or_else(|| not_editable(source))?;
+    let file = validate_item_file_path(&dir, path)?;
+    if file.exists() {
+        return Ok(FileOp::Conflict);
+    }
+    if let Some(parent) = file.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&file, content)?;
+    Ok(FileOp::Done(item_file(&dir, path, file)))
+}
+
+/// Delete one file of an item's folder. The entry point cannot be deleted: an
+/// item without its `SKILL.md`/`shim.md` is not an item any more.
+pub fn delete_library_file(
+    kind: LibraryKind,
+    id: &str,
+    source: LibrarySource,
+    path: &str,
+) -> Result<FileOp> {
+    ensure_team_library()?;
+    validate_item_id(id)?;
+    let dir = item_dir(kind, id, source).ok_or_else(|| not_editable(source))?;
+    let file = validate_item_file_path(&dir, path)?;
+    if path == LibraryItem::primary_file(kind) {
+        return Err(anyhow!(
+            "Cannot delete {path}: it is the item's entry point"
+        ));
+    }
+    if !file.is_file() {
+        return Ok(FileOp::Missing);
+    }
+    std::fs::remove_file(&file)?;
+    Ok(FileOp::Done(item_file(&dir, path, file)))
+}
+
+/// The relative path a request addresses, defaulting to the entry-point file.
+fn item_file_rel(item: &LibraryItem, path: Option<&str>) -> String {
+    match path.filter(|path| !path.is_empty()) {
+        Some(path) => path.to_string(),
+        None => item.primary_path().to_string(),
+    }
+}
+
+fn item_file(dir: &Path, rel: &str, absolute: PathBuf) -> ItemFile {
+    ItemFile {
+        path: rel.to_string(),
+        absolute,
+        dir: dir.to_path_buf(),
+    }
+}
+
+/// Create a new team-owned library item holding a single entry-point file.
 pub fn create_team_library_item(
     kind: LibraryKind,
     name: &str,
@@ -304,13 +511,7 @@ pub fn create_team_library_item(
     ensure_team_library()?;
     let id = slugify_name(name)?;
     validate_team_id(kind, &id)?;
-    let (dir, file_name): (PathBuf, &str) = match kind {
-        LibraryKind::Skill => (
-            library_dir().join("skills").join("team").join(&id),
-            "SKILL.md",
-        ),
-        LibraryKind::Agent => (library_dir().join("agents").join(&id), "shim.md"),
-    };
+    let dir = team_item_dir(kind, &id);
     if dir.exists() {
         return Err(anyhow!(
             "A team {kind} named '{name}' already exists",
@@ -318,7 +519,7 @@ pub fn create_team_library_item(
         ));
     }
     std::fs::create_dir_all(&dir)?;
-    let path = dir.join(file_name);
+    let path = dir.join(LibraryItem::primary_file(kind));
     std::fs::write(&path, content)?;
     let display_name = parse_name_from_frontmatter(content).unwrap_or_else(|| name.to_string());
     Ok(LibraryItem::new(
@@ -326,8 +527,64 @@ pub fn create_team_library_item(
         kind,
         display_name,
         LibrarySource::Team,
-        path,
+        dir,
     ))
+}
+
+/// Create a new team-owned item from a `.zip` of a whole folder — the shape a
+/// skill actually has, with its references, scripts, and assets beside the
+/// `SKILL.md`. The archive is held to the same caps and path rules as a user
+/// skill upload, and must carry the item's entry-point file.
+pub fn create_team_library_item_from_zip(
+    kind: LibraryKind,
+    name: &str,
+    zip_bytes: &[u8],
+) -> Result<LibraryItem> {
+    ensure_team_library()?;
+    let id = slugify_name(name)?;
+    validate_team_id(kind, &id)?;
+    let dir = team_item_dir(kind, &id);
+    if dir.exists() {
+        return Err(anyhow!(
+            "A team {kind} named '{name}' already exists",
+            kind = kind_label(kind)
+        ));
+    }
+    let files =
+        crate::local::user_skills::extract_zip_folder(zip_bytes, LibraryItem::primary_file(kind))?;
+    std::fs::create_dir_all(&dir)?;
+    // A folder half written from a rejected archive is not an item: leave
+    // nothing behind the caller could mistake for one.
+    let written = write_item_files(&dir, files);
+    if let Err(error) = written {
+        let _ = std::fs::remove_dir_all(&dir);
+        return Err(error);
+    }
+    let primary = std::fs::read_to_string(dir.join(LibraryItem::primary_file(kind))).ok();
+    let display_name = primary
+        .as_deref()
+        .and_then(parse_name_from_frontmatter)
+        .unwrap_or_else(|| name.to_string());
+    Ok(LibraryItem::new(
+        id,
+        kind,
+        display_name,
+        LibrarySource::Team,
+        dir,
+    ))
+}
+
+/// Write extracted archive entries under an item folder, each path re-checked so
+/// nothing a zip spells can land outside it.
+fn write_item_files(dir: &Path, files: Vec<(String, Vec<u8>)>) -> Result<()> {
+    for (rel, bytes) in files {
+        let dest = validate_item_file_path(dir, &rel)?;
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&dest, bytes)?;
+    }
+    Ok(())
 }
 
 /// Delete a library item. Returns `true` if it existed.
@@ -337,11 +594,10 @@ pub fn delete_library_item(kind: LibraryKind, id: &str, source: LibrarySource) -
     ensure_team_library()?;
     validate_item_id(id)?;
     let dir = match (kind, source) {
-        (LibraryKind::Skill, LibrarySource::Team) => {
-            library_dir().join("skills").join("team").join(id)
+        (LibraryKind::Skill, LibrarySource::Team) | (LibraryKind::Agent, LibrarySource::Team) => {
+            team_item_dir(kind, id)
         }
         (LibraryKind::Skill, LibrarySource::Supervisor) => supervisor_skills_base().join(id),
-        (LibraryKind::Agent, LibrarySource::Team) => library_dir().join("agents").join(id),
         _ => return Err(anyhow!("Cannot delete {source:?} {kind}")),
     };
     if !dir.exists() {
@@ -438,7 +694,7 @@ fn list_supervisor_skills_in(base: &Path) -> Result<Vec<LibraryItem>> {
             LibraryKind::Skill,
             name,
             LibrarySource::Supervisor,
-            file_path,
+            path,
         ));
     }
     Ok(items)
@@ -448,14 +704,14 @@ fn list_builtin_skills() -> Result<Vec<LibraryItem>> {
     let base = library_dir().join("skills");
     let mut items = Vec::new();
     for skill in skills(SkillSet::Full) {
-        let path = base.join(skill.name).join("SKILL.md");
-        if path.exists() {
+        let dir = base.join(skill.name);
+        if dir.join("SKILL.md").exists() {
             items.push(LibraryItem::new(
                 skill.name.to_string(),
                 LibraryKind::Skill,
                 skill.name.to_string(),
                 LibrarySource::BuiltIn,
-                path,
+                dir,
             ));
         }
     }
@@ -489,19 +745,12 @@ fn list_agents(source: LibrarySource) -> Result<Vec<LibraryItem>> {
         if !matches_source {
             continue;
         }
-        let file_path = path.join("shim.md");
         let name = builtin_agents()
             .iter()
             .find(|(bid, _, _)| *bid == id.as_str())
             .map(|(_, name, _)| name.to_string())
             .unwrap_or_else(|| id.clone());
-        items.push(LibraryItem::new(
-            id,
-            LibraryKind::Agent,
-            name,
-            source,
-            file_path,
-        ));
+        items.push(LibraryItem::new(id, LibraryKind::Agent, name, source, path));
     }
     Ok(items)
 }
@@ -526,11 +775,7 @@ fn list_team_dirs(
             .and_then(|n| n.to_str())
             .unwrap_or("")
             .to_string();
-        let file_path = path.join(if kind == LibraryKind::Skill {
-            "SKILL.md"
-        } else {
-            "shim.md"
-        });
+        let file_path = path.join(LibraryItem::primary_file(kind));
         let name = if file_path.exists() {
             std::fs::read_to_string(&file_path)
                 .ok()
@@ -539,22 +784,16 @@ fn list_team_dirs(
         } else {
             id.clone()
         };
-        items.push(LibraryItem::new(id, kind, name, source, file_path));
+        items.push(LibraryItem::new(id, kind, name, source, path));
     }
     Ok(items)
 }
 
 fn get_skill_item(id: &str, source: LibrarySource) -> Result<Option<LibraryItem>> {
-    let path = match source {
-        LibrarySource::BuiltIn => library_dir().join("skills").join(id).join("SKILL.md"),
-        LibrarySource::Team => library_dir()
-            .join("skills")
-            .join("team")
-            .join(id)
-            .join("SKILL.md"),
-        LibrarySource::Project => return Ok(None),
-        LibrarySource::Supervisor => supervisor_skills_base().join(id).join("SKILL.md"),
+    let Some(dir) = item_dir(LibraryKind::Skill, id, source) else {
+        return Ok(None);
     };
+    let path = dir.join("SKILL.md");
     if !path.exists() {
         return Ok(None);
     }
@@ -567,20 +806,21 @@ fn get_skill_item(id: &str, source: LibrarySource) -> Result<Option<LibraryItem>
         LibraryKind::Skill,
         name,
         source,
-        path,
+        dir,
     )))
 }
 
 fn get_agent_item(id: &str, source: LibrarySource) -> Result<Option<LibraryItem>> {
-    let path = library_dir().join("agents").join(id).join("shim.md");
-    if !path.exists() {
+    let Some(dir) = item_dir(LibraryKind::Agent, id, source) else {
+        return Ok(None);
+    };
+    if !dir.join("shim.md").exists() {
         return Ok(None);
     }
     let is_builtin = is_builtin_agent(id);
     match source {
         LibrarySource::BuiltIn if !is_builtin => return Ok(None),
         LibrarySource::Team if is_builtin => return Ok(None),
-        LibrarySource::Project => return Ok(None),
         _ => {}
     }
     let name = builtin_agents()
@@ -593,11 +833,96 @@ fn get_agent_item(id: &str, source: LibrarySource) -> Result<Option<LibraryItem>
         LibraryKind::Agent,
         name,
         source,
-        path,
+        dir,
     )))
 }
 
 // --- helpers ----------------------------------------------------------------
+
+/// The folder a team-owned item is created in.
+fn team_item_dir(kind: LibraryKind, id: &str) -> PathBuf {
+    match kind {
+        LibraryKind::Skill => library_dir().join("skills").join("team").join(id),
+        LibraryKind::Agent => library_dir().join("agents").join(id),
+    }
+}
+
+/// The folder an item of this kind, id, and source lives in — the one place that
+/// knows the layout. `None` for the sources that hold no folder of their own:
+/// project-scoped items, and agent shims from the supervisor clone (the clone
+/// ships skills only).
+fn item_dir(kind: LibraryKind, id: &str, source: LibrarySource) -> Option<PathBuf> {
+    match (kind, source) {
+        (LibraryKind::Skill, LibrarySource::BuiltIn) => Some(library_dir().join("skills").join(id)),
+        (LibraryKind::Skill, LibrarySource::Team) => Some(team_item_dir(kind, id)),
+        (LibraryKind::Skill, LibrarySource::Supervisor) => Some(supervisor_skills_base().join(id)),
+        (LibraryKind::Agent, LibrarySource::BuiltIn | LibrarySource::Team) => {
+            Some(team_item_dir(kind, id))
+        }
+        (LibraryKind::Agent, LibrarySource::Supervisor) | (_, LibrarySource::Project) => None,
+    }
+}
+
+/// Why an item of this source cannot be edited here.
+fn not_editable(source: LibrarySource) -> anyhow::Error {
+    match source {
+        LibrarySource::Project => anyhow!("Project-scoped library items are not editable here"),
+        _ => anyhow!("Supervisor source only supports skills"),
+    }
+}
+
+/// Resolve a `/`-separated relative path against an item's folder, refusing
+/// anything that could leave it.
+///
+/// The API hands `path` straight from a query string, so the lexical rules come
+/// first: an absolute path, a `.`/`..` segment, a backslash, a drive colon, or a
+/// NUL is refused outright. Containment is then confirmed against the real
+/// filesystem — the path is canonicalized as far as it exists, and a symlink is
+/// never followed out of the folder (a dangling one is refused too, since
+/// writing through it would create its target). A path that does not exist yet
+/// is fine: the remaining segments can only add names inside the folder.
+pub fn validate_item_file_path(item_dir: &Path, rel: &str) -> Result<PathBuf> {
+    if rel.is_empty()
+        || rel.starts_with('/')
+        || rel.contains(['\\', ':', '\0'])
+        || rel
+            .split('/')
+            .any(|seg| seg.is_empty() || seg == "." || seg == "..")
+    {
+        return Err(anyhow!("Invalid library file path: {rel}"));
+    }
+    let base = crate::paths::canonicalize(item_dir)
+        .map_err(|e| anyhow!("Could not resolve {}: {e}", item_dir.display()))?;
+    let segments: Vec<&str> = rel.split('/').collect();
+    let mut resolved = base.clone();
+    let mut index = 0;
+    while index < segments.len() {
+        let candidate = resolved.join(segments[index]);
+        match std::fs::symlink_metadata(&candidate) {
+            Ok(meta) if meta.file_type().is_symlink() => {
+                let target = crate::paths::canonicalize(&candidate)
+                    .map_err(|_| anyhow!("Path escapes the library item folder: {rel}"))?;
+                if !target.starts_with(&base) {
+                    return Err(anyhow!("Path escapes the library item folder: {rel}"));
+                }
+                resolved = target;
+            }
+            Ok(meta) => {
+                // A file where a directory is required can never hold the rest
+                // of the path.
+                if !meta.is_dir() && index + 1 < segments.len() {
+                    return Err(anyhow!("Invalid library file path: {rel}"));
+                }
+                resolved = candidate;
+            }
+            Err(_) => break,
+        }
+        index += 1;
+    }
+    Ok(segments[index..]
+        .iter()
+        .fold(resolved, |path, seg| path.join(seg)))
+}
 
 fn slugify_name(name: &str) -> Result<String> {
     let slug = crate::local::slugify(name);
@@ -812,5 +1137,287 @@ mod tests {
         assert_eq!(list_supervisor_skills_in(&flat).unwrap().len(), 1);
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn zip_of(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        use std::io::Write;
+        let mut buf = Vec::new();
+        {
+            let mut writer = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+            let options = zip::write::SimpleFileOptions::default();
+            for (name, data) in entries {
+                writer.start_file(*name, options).unwrap();
+                writer.write_all(data).unwrap();
+            }
+            writer.finish().unwrap();
+        }
+        buf
+    }
+
+    fn team_skill(id: &str) -> LibraryItem {
+        create_team_library_item(
+            LibraryKind::Skill,
+            id,
+            &format!("---\nname: {id}\ndescription: d\n---\nbody\n"),
+        )
+        .unwrap()
+    }
+
+    /// A skill is a folder, so listing one has to show the files beside its
+    /// `SKILL.md` — the shipped `references/*.md` a user could never see, let
+    /// alone edit, while the library read exactly one path.
+    #[test]
+    fn a_builtin_skill_lists_its_whole_folder() {
+        let _tmp = TmpDataDir::new();
+        let items = list_library_items(Some(LibraryKind::Skill), LibrarySource::BuiltIn).unwrap();
+        let compute = items.iter().find(|item| item.id == "orx-compute").unwrap();
+
+        let paths: Vec<&str> = compute
+            .files
+            .iter()
+            .map(|file| file.path.as_str())
+            .collect();
+        assert_eq!(paths.first(), Some(&"SKILL.md"), "{paths:?}");
+        assert!(paths.contains(&"references/hf.md"), "{paths:?}");
+        // The entry point leads; everything after it is in path order.
+        let mut rest = paths[1..].to_vec();
+        rest.sort_unstable();
+        assert_eq!(&paths[1..], rest.as_slice(), "{paths:?}");
+        assert!(compute.files.iter().all(|file| file.bytes > 0));
+        assert_eq!(compute.dir_path, compute.file_path.parent().unwrap());
+        assert_eq!(compute.primary_path(), "SKILL.md");
+
+        // And the resource is readable through the folder API.
+        let (path, content) = read_library_file(compute, Some("references/hf.md"))
+            .unwrap()
+            .expect("a seeded resource");
+        assert_eq!(path, "references/hf.md");
+        assert!(content.contains('#'));
+    }
+
+    /// An install seeded before resources shipped kept its `SKILL.md`, so the
+    /// seeding skipped the folder and the resources never arrived. Seeding must
+    /// fill in what is missing without touching what the team has edited.
+    #[test]
+    fn seeding_fills_in_resources_of_an_existing_install() {
+        let _tmp = TmpDataDir::new();
+        ensure_team_library().unwrap();
+        let dir = library_dir().join("skills/orx-compute");
+        let references = dir.join("references");
+        std::fs::remove_dir_all(&references).unwrap();
+        let skill_md = dir.join("SKILL.md");
+        std::fs::write(&skill_md, "---\nname: orx-compute\n---\nteam edit\n").unwrap();
+
+        ensure_team_library().unwrap();
+
+        assert!(references.join("hf.md").exists());
+        assert!(references.join("k8s.md").exists());
+        assert!(std::fs::read_to_string(&skill_md)
+            .unwrap()
+            .contains("team edit"));
+    }
+
+    /// A cleanup that deletes more than it was asked to is the worst failure a
+    /// folder API can have, so every verb resolves its path the same way.
+    #[test]
+    fn item_file_paths_cannot_escape_the_item_folder() {
+        let _tmp = TmpDataDir::new();
+        let item = team_skill("paths");
+        for escape in [
+            "../evil.md",
+            "../../../../etc/passwd",
+            "/etc/passwd",
+            "references/../../evil.md",
+            "..\\evil.md",
+            "references/./x.md",
+            "references//x.md",
+            "C:/evil.md",
+            "nul\0.md",
+            "",
+        ] {
+            assert!(
+                validate_item_file_path(&item.dir_path, escape).is_err(),
+                "{escape} was accepted"
+            );
+        }
+        assert!(validate_item_file_path(&item.dir_path, "references/x.md").is_ok());
+
+        // Lexically clean but pointed out of the folder: a symlink is refused
+        // rather than followed, dangling or not.
+        #[cfg(unix)]
+        {
+            let outside = item.dir_path.parent().unwrap().join("outside.md");
+            std::fs::write(&outside, "not mine").unwrap();
+            std::os::unix::fs::symlink(&outside, item.dir_path.join("link.md")).unwrap();
+            std::os::unix::fs::symlink(item.dir_path.parent().unwrap(), item.dir_path.join("up"))
+                .unwrap();
+            std::os::unix::fs::symlink("/etc/hostname", item.dir_path.join("etc-host")).unwrap();
+
+            // A link to a file outside, to a directory outside, and to a system
+            // file: all three are refused rather than followed.
+            assert!(validate_item_file_path(&item.dir_path, "link.md").is_err());
+            assert!(validate_item_file_path(&item.dir_path, "up/outside.md").is_err());
+            assert!(validate_item_file_path(&item.dir_path, "etc-host").is_err());
+            assert!(read_library_file(&item, Some("link.md")).is_err());
+            assert!(write_library_file(
+                LibraryKind::Skill,
+                "paths",
+                LibrarySource::Team,
+                Some("link.md"),
+                "overwritten"
+            )
+            .is_err());
+            // The target outside the item is untouched.
+            assert_eq!(std::fs::read_to_string(&outside).unwrap(), "not mine");
+        }
+    }
+
+    /// Create, write, and delete of one file of a folder: parents are created,
+    /// an existing file is a conflict for create and a target for write, and the
+    /// entry point can never be deleted.
+    #[test]
+    fn folder_files_round_trip_through_the_library() {
+        let _tmp = TmpDataDir::new();
+        team_skill("crates");
+
+        let created = create_library_file(
+            LibraryKind::Skill,
+            "crates",
+            LibrarySource::Team,
+            "scripts/run.sh",
+            "#!/bin/sh\necho hi\n",
+        )
+        .unwrap();
+        let crate::local::library::FileOp::Done(file) = created else {
+            panic!("nested file should be created");
+        };
+        assert_eq!(file.path, "scripts/run.sh");
+        assert!(file.absolute.starts_with(&file.dir));
+
+        assert!(matches!(
+            create_library_file(
+                LibraryKind::Skill,
+                "crates",
+                LibrarySource::Team,
+                "scripts/run.sh",
+                "clobber"
+            )
+            .unwrap(),
+            FileOp::Conflict
+        ));
+        assert!(matches!(
+            write_library_file(
+                LibraryKind::Skill,
+                "crates",
+                LibrarySource::Team,
+                Some("scripts/run.sh"),
+                "echo rewritten\n"
+            )
+            .unwrap(),
+            FileOp::Done(_)
+        ));
+        // A path that does not exist is a miss, not an accidental create.
+        assert!(matches!(
+            write_library_file(
+                LibraryKind::Skill,
+                "crates",
+                LibrarySource::Team,
+                Some("missing.md"),
+                "x"
+            )
+            .unwrap(),
+            FileOp::Missing
+        ));
+
+        let item = get_library_item(LibraryKind::Skill, "crates", LibrarySource::Team)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            item.files
+                .iter()
+                .map(|file| file.path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["SKILL.md", "scripts/run.sh"]
+        );
+        assert_eq!(
+            read_library_file(&item, Some("scripts/run.sh"))
+                .unwrap()
+                .unwrap()
+                .1,
+            "echo rewritten\n"
+        );
+
+        assert!(delete_library_file(
+            LibraryKind::Skill,
+            "crates",
+            LibrarySource::Team,
+            "SKILL.md"
+        )
+        .is_err());
+        assert!(matches!(
+            delete_library_file(
+                LibraryKind::Skill,
+                "crates",
+                LibrarySource::Team,
+                "scripts/run.sh"
+            )
+            .unwrap(),
+            FileOp::Done(_)
+        ));
+        assert!(matches!(
+            delete_library_file(
+                LibraryKind::Skill,
+                "crates",
+                LibrarySource::Team,
+                "scripts/run.sh"
+            )
+            .unwrap(),
+            FileOp::Missing
+        ));
+    }
+
+    /// Creating a whole folder from an upload: the archive's files all land in
+    /// the item, its frontmatter names it, and a malformed archive leaves no
+    /// half-built item behind.
+    #[test]
+    fn a_zip_creates_a_whole_team_folder() {
+        let _tmp = TmpDataDir::new();
+        let zip = zip_of(&[
+            (
+                "pack/SKILL.md",
+                b"---\nname: from-zip\ndescription: d\n---\nbody\n",
+            ),
+            ("pack/references/x.md", b"# x\n"),
+            ("pack/scripts/run.sh", b"#!/bin/sh\n"),
+            ("__MACOSX/pack/._SKILL.md", b"junk"),
+        ]);
+        let item = create_team_library_item_from_zip(LibraryKind::Skill, "from-zip", &zip).unwrap();
+        assert_eq!(item.name, "from-zip");
+        assert_eq!(
+            item.files
+                .iter()
+                .map(|file| file.path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["SKILL.md", "references/x.md", "scripts/run.sh"]
+        );
+        assert_eq!(
+            read_library_file(&item, Some("references/x.md"))
+                .unwrap()
+                .unwrap()
+                .1,
+            "# x\n"
+        );
+
+        // The same archive again: the name is taken.
+        assert!(create_team_library_item_from_zip(LibraryKind::Skill, "from-zip", &zip).is_err());
+        // No entry point, and a broken archive: refused, with nothing left on
+        // disk to mistake for an item.
+        let no_md = zip_of(&[("pack/readme.md", b"hi")]);
+        assert!(create_team_library_item_from_zip(LibraryKind::Skill, "no-md", &no_md).is_err());
+        assert!(
+            create_team_library_item_from_zip(LibraryKind::Skill, "broken", b"not a zip").is_err()
+        );
+        assert!(!library_dir().join("skills/team/no-md").exists());
+        assert!(!library_dir().join("skills/team/broken").exists());
     }
 }

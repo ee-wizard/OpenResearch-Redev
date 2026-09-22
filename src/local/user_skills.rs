@@ -317,13 +317,36 @@ pub fn save_zip(bytes: &[u8]) -> Result<UserSkill> {
 }
 
 fn save_zip_in(root: &Path, bytes: &[u8]) -> Result<UserSkill> {
+    let files = extract_zip_folder(bytes, "SKILL.md")?;
+    let md = files
+        .iter()
+        .find(|(name, _)| name == "SKILL.md")
+        .map(|(_, bytes)| bytes.as_slice())
+        .ok_or_else(|| anyhow!("the .zip must contain a SKILL.md"))?;
+    let text = std::str::from_utf8(md).map_err(|_| anyhow!("SKILL.md must be UTF-8 text"))?;
+    let fm = parse_frontmatter(text)?;
+    validate_name(&fm.name)?;
+    write_skill(root, &fm.name, files)
+}
+
+/// Read a `.zip` of a folder into `(relative path, bytes)` pairs, rebased so the
+/// folder's entry point — `SKILL.md`, or `shim.md` for an agent shim — sits at
+/// the archive root.
+///
+/// Shared by the user-skill upload and the team library's zip create, so both
+/// get the same hardening: entry-count and total-byte caps (a zip bomb's
+/// declared size is not trusted — every entry is read against the remaining
+/// budget), rejection of absolute, `..`, drive-prefixed, and symlink entries,
+/// and of an archive with no entry point. An archive that wraps the folder in a
+/// directory is rebased onto that directory; files outside it are ignored.
+pub(crate) fn extract_zip_folder(bytes: &[u8], primary: &str) -> Result<Vec<(String, Vec<u8>)>> {
     use std::io::{Cursor, Read};
 
     let mut zip = zip::ZipArchive::new(Cursor::new(bytes))
         .map_err(|e| anyhow!("not a valid .zip archive: {e}"))?;
 
     let mut files: Vec<(String, Vec<u8>)> = Vec::new();
-    let mut skill_md: Option<String> = None;
+    let mut entry_point: Option<String> = None;
     let mut total: u64 = 0;
     for i in 0..zip.len() {
         let mut entry = zip
@@ -341,6 +364,14 @@ fn save_zip_in(root: &Path, bytes: &[u8]) -> Result<UserSkill> {
         if name.starts_with("__MACOSX/") || basename(&name) == ".DS_Store" {
             continue;
         }
+        // A link entry would be written as a file holding its target path, and a
+        // reader following it would land outside the folder it was extracted to.
+        if entry
+            .unix_mode()
+            .is_some_and(|mode| mode & 0o170_000 == 0o120_000)
+        {
+            return Err(anyhow!("zip contains a symlink: {name}"));
+        }
         if files.len() >= MAX_FILES {
             return Err(anyhow!("zip has too many files (max {MAX_FILES})"));
         }
@@ -356,37 +387,28 @@ fn save_zip_in(root: &Path, bytes: &[u8]) -> Result<UserSkill> {
         if total > MAX_TOTAL_BYTES {
             return Err(anyhow!("zip is too large once extracted"));
         }
-        if basename(&name) == "SKILL.md" {
-            // Prefer the shallowest SKILL.md if several appear.
-            if skill_md
+        if basename(&name) == primary {
+            // Prefer the shallowest entry point if several appear.
+            if entry_point
                 .as_deref()
                 .is_none_or(|existing| depth(&name) < depth(existing))
             {
-                skill_md = Some(name.clone());
+                entry_point = Some(name.clone());
             }
         }
         files.push((name, buf));
     }
 
-    let skill_md = skill_md.ok_or_else(|| anyhow!("the .zip must contain a SKILL.md"))?;
-    let prefix = match skill_md.rsplit_once('/') {
+    let entry_point = entry_point.ok_or_else(|| anyhow!("the .zip must contain a {primary}"))?;
+    let prefix = match entry_point.rsplit_once('/') {
         Some((dir, _)) => format!("{dir}/"),
         None => String::new(),
     };
 
-    let md = files
-        .iter()
-        .find(|(n, _)| *n == skill_md)
-        .map(|(_, b)| b.clone())
-        .unwrap_or_default();
-    let text = std::str::from_utf8(&md).map_err(|_| anyhow!("SKILL.md must be UTF-8 text"))?;
-    let fm = parse_frontmatter(text)?;
-    validate_name(&fm.name)?;
-
     let mut rebased: Vec<(String, Vec<u8>)> = Vec::new();
     for (name, buf) in files {
         let Some(rel) = name.strip_prefix(&prefix) else {
-            continue; // a stray file outside the skill folder — ignore
+            continue; // a stray file outside the folder — ignore
         };
         if rel.is_empty()
             || rel
@@ -397,8 +419,7 @@ fn save_zip_in(root: &Path, bytes: &[u8]) -> Result<UserSkill> {
         }
         rebased.push((rel.to_string(), buf));
     }
-
-    write_skill(root, &fm.name, rebased)
+    Ok(rebased)
 }
 
 fn write_skill(root: &Path, name: &str, files: Vec<(String, Vec<u8>)>) -> Result<UserSkill> {
