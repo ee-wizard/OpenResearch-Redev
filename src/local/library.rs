@@ -376,8 +376,7 @@ pub fn read_library_file(
     item: &LibraryItem,
     path: Option<&str>,
 ) -> Result<Option<(String, String)>> {
-    let rel = item_file_rel(item, path);
-    let file = validate_item_file_path(&item.dir_path, &rel)?;
+    let (rel, file) = item_file_path(&item.dir_path, item_file_rel(item.kind, path))?;
     if !file.is_file() {
         return Ok(None);
     }
@@ -418,8 +417,8 @@ pub fn write_library_file(
     validate_item_id(id)?;
     let dir = item_dir(kind, id, source).ok_or_else(|| not_editable(source))?;
     match path.filter(|path| !path.is_empty()) {
-        Some(rel) => {
-            let file = validate_item_file_path(&dir, rel)?;
+        Some(raw) => {
+            let (rel, file) = item_file_path(&dir, raw)?;
             if !file.is_file() {
                 return Ok(FileOp::Missing);
             }
@@ -427,8 +426,7 @@ pub fn write_library_file(
             Ok(FileOp::Done(item_file(&dir, rel, file)))
         }
         None => {
-            let rel = LibraryItem::primary_file(kind);
-            let file = dir.join(rel);
+            let (rel, file) = item_file_path(&dir, LibraryItem::primary_file(kind))?;
             if let Some(parent) = file.parent() {
                 std::fs::create_dir_all(parent)?;
             }
@@ -451,7 +449,7 @@ pub fn create_library_file(
     ensure_team_library()?;
     validate_item_id(id)?;
     let dir = item_dir(kind, id, source).ok_or_else(|| not_editable(source))?;
-    let file = validate_item_file_path(&dir, path)?;
+    let (rel, file) = item_file_path(&dir, path)?;
     if file.exists() {
         return Ok(FileOp::Conflict);
     }
@@ -459,7 +457,7 @@ pub fn create_library_file(
         std::fs::create_dir_all(parent)?;
     }
     std::fs::write(&file, content)?;
-    Ok(FileOp::Done(item_file(&dir, path, file)))
+    Ok(FileOp::Done(item_file(&dir, rel, file)))
 }
 
 /// Delete one file of an item's folder. The entry point cannot be deleted: an
@@ -473,30 +471,46 @@ pub fn delete_library_file(
     ensure_team_library()?;
     validate_item_id(id)?;
     let dir = item_dir(kind, id, source).ok_or_else(|| not_editable(source))?;
-    let file = validate_item_file_path(&dir, path)?;
-    if path == LibraryItem::primary_file(kind) {
-        return Err(anyhow!(
-            "Cannot delete {path}: it is the item's entry point"
-        ));
+    let (rel, file) = item_file_path(&dir, path)?;
+    if rel == LibraryItem::primary_file(kind) {
+        return Err(anyhow!("Cannot delete {rel}: it is the item's entry point"));
     }
     if !file.is_file() {
         return Ok(FileOp::Missing);
     }
     std::fs::remove_file(&file)?;
-    Ok(FileOp::Done(item_file(&dir, path, file)))
+    Ok(FileOp::Done(item_file(&dir, rel, file)))
 }
 
-/// The relative path a request addresses, defaulting to the entry-point file.
-fn item_file_rel(item: &LibraryItem, path: Option<&str>) -> String {
-    match path.filter(|path| !path.is_empty()) {
-        Some(path) => path.to_string(),
-        None => item.primary_path().to_string(),
-    }
+/// Resolve a caller-supplied path for a file inside an item's folder, as
+/// `(relative path, absolute path)`.
+///
+/// The same value reaches the API two ways — a `?path=` query value the
+/// extractor has already percent-decoded, and a JSON body field that arrives
+/// verbatim — so it is decoded here exactly once, never trusting the spelling
+/// that arrived, and only then validated against the item folder. An encoded
+/// separator therefore behaves exactly like a literal one: `..%2F..%2Fescaped.md`
+/// is refused in either form instead of landing as a file with that name.
+///
+/// A percent-escape that is not valid hex is left alone rather than refused, so
+/// a file the team named `100%.md` stays addressable.
+pub fn item_file_path(item_dir: &Path, raw: &str) -> Result<(String, PathBuf)> {
+    let decoded =
+        urlencoding::decode(raw).map_err(|e| anyhow!("Invalid library file path: {raw} ({e})"))?;
+    let absolute = validate_item_file_path(item_dir, &decoded)?;
+    Ok((decoded.into_owned(), absolute))
 }
 
-fn item_file(dir: &Path, rel: &str, absolute: PathBuf) -> ItemFile {
+/// The caller-supplied path a request addresses, defaulting to the item's
+/// entry-point file when it names none (or names an empty one).
+fn item_file_rel(kind: LibraryKind, path: Option<&str>) -> &str {
+    path.filter(|path| !path.is_empty())
+        .unwrap_or(LibraryItem::primary_file(kind))
+}
+
+fn item_file(dir: &Path, rel: String, absolute: PathBuf) -> ItemFile {
     ItemFile {
-        path: rel.to_string(),
+        path: rel,
         absolute,
         dir: dir.to_path_buf(),
     }
@@ -874,13 +888,16 @@ fn not_editable(source: LibrarySource) -> anyhow::Error {
 /// Resolve a `/`-separated relative path against an item's folder, refusing
 /// anything that could leave it.
 ///
-/// The API hands `path` straight from a query string, so the lexical rules come
-/// first: an absolute path, a `.`/`..` segment, a backslash, a drive colon, or a
-/// NUL is refused outright. Containment is then confirmed against the real
-/// filesystem — the path is canonicalized as far as it exists, and a symlink is
-/// never followed out of the folder (a dangling one is refused too, since
-/// writing through it would create its target). A path that does not exist yet
-/// is fine: the remaining segments can only add names inside the folder.
+/// Takes an already-decoded relative path: a value that came from a caller goes
+/// through [`item_file_path`] first, which is where percent-decoding happens.
+///
+/// The lexical rules come first: an absolute path, a `.`/`..` segment, a
+/// backslash, a drive colon, or a NUL is refused outright. Containment is then
+/// confirmed against the real filesystem — the path is canonicalized as far as
+/// it exists, and a symlink is never followed out of the folder (a dangling one
+/// is refused too, since writing through it would create its target). A path
+/// that does not exist yet is fine: the remaining segments can only add names
+/// inside the folder.
 pub fn validate_item_file_path(item_dir: &Path, rel: &str) -> Result<PathBuf> {
     if rel.is_empty()
         || rel.starts_with('/')
@@ -1374,6 +1391,107 @@ mod tests {
             .unwrap(),
             FileOp::Missing
         ));
+    }
+
+    /// The same path reaches the API as a percent-decoded query value and as a
+    /// verbatim body field, so both forms are normalized before anything touches
+    /// the disk — otherwise an encoded `..%2F..%2F` would be refused in the
+    /// query and accepted as a filename in the body.
+    #[test]
+    fn a_file_path_is_normalized_once_whichever_form_carried_it() {
+        let _tmp = TmpDataDir::new();
+        let item = team_skill("decoding");
+
+        let (rel, absolute) = item_file_path(&item.dir_path, "references/x.md").unwrap();
+        assert_eq!(rel, "references/x.md");
+        assert_eq!(absolute, item.dir_path.join("references/x.md"));
+        // A space only ever arrives encoded; it lands as a space, not as `%20`.
+        assert_eq!(
+            item_file_path(&item.dir_path, "a%20b.md").unwrap().0,
+            "a b.md"
+        );
+        // An escape that is not valid hex is a literal name, not a refusal.
+        assert_eq!(
+            item_file_path(&item.dir_path, "100%.md").unwrap().0,
+            "100%.md"
+        );
+
+        for escape in [
+            "..%2F..%2Fescaped.md",
+            "%2e%2e%2f%2e%2e%2fescaped.md",
+            "%2fetc%2fpasswd",
+            "..%5Cescaped.md",
+            "..%2fSKILL.md",
+        ] {
+            assert!(
+                item_file_path(&item.dir_path, escape).is_err(),
+                "{escape} was accepted"
+            );
+            assert!(
+                create_library_file(
+                    LibraryKind::Skill,
+                    "decoding",
+                    LibrarySource::Team,
+                    escape,
+                    "x"
+                )
+                .is_err(),
+                "create accepted {escape}"
+            );
+            assert!(
+                write_library_file(
+                    LibraryKind::Skill,
+                    "decoding",
+                    LibrarySource::Team,
+                    Some(escape),
+                    "x"
+                )
+                .is_err(),
+                "write accepted {escape}"
+            );
+            assert!(
+                delete_library_file(LibraryKind::Skill, "decoding", LibrarySource::Team, escape)
+                    .is_err(),
+                "delete accepted {escape}"
+            );
+        }
+        assert!(!item.dir_path.join("..%2F..%2Fescaped.md").exists());
+        assert!(!item.dir_path.parent().unwrap().join("escaped.md").exists());
+
+        // The happy path still round-trips, and an encoded spelling addresses
+        // the very same file as the literal one.
+        assert!(matches!(
+            create_library_file(
+                LibraryKind::Skill,
+                "decoding",
+                LibrarySource::Team,
+                "references/new.md",
+                "hi"
+            )
+            .unwrap(),
+            FileOp::Done(_)
+        ));
+        assert!(matches!(
+            write_library_file(
+                LibraryKind::Skill,
+                "decoding",
+                LibrarySource::Team,
+                Some("references/ne%77.md"),
+                "rewritten"
+            )
+            .unwrap(),
+            FileOp::Done(_)
+        ));
+        let item = get_library_item(LibraryKind::Skill, "decoding", LibrarySource::Team)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            read_library_file(&item, Some("references/new.md"))
+                .unwrap()
+                .unwrap()
+                .1,
+            "rewritten"
+        );
     }
 
     /// Creating a whole folder from an upload: the archive's files all land in

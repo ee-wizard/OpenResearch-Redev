@@ -1546,8 +1546,8 @@ fn decode_upload(encoded: &str) -> std::result::Result<Vec<u8>, ApiError> {
 #[derive(Deserialize)]
 struct UpdateLibraryItemReq {
     content: String,
-    /// A file inside the item's folder; omitted means its entry-point file, so
-    /// clients that never knew about folders keep working.
+    /// A file inside the item's folder. The shipped UI sends it here; a caller
+    /// that would rather put it in the query can, and the two must agree.
     path: Option<String>,
 }
 
@@ -1558,7 +1558,7 @@ async fn update_library_item(
 ) -> ApiResult {
     let kind = parse_library_kind(&kind)?;
     let source = library_source(q.source.as_deref())?;
-    let path = req.path.clone();
+    let path = patch_target_path(q.path.as_deref(), req.path.as_deref())?;
     let content = req.content;
     let outcome = tokio::task::spawn_blocking(move || {
         crate::local::library::write_library_file(kind, &id, source, path.as_deref(), &content)
@@ -1567,6 +1567,30 @@ async fn update_library_item(
     .map_err(|e| ApiError::from(anyhow!("library task failed: {e}")))?
     .map_err(bad_request)?;
     file_op_response(outcome)
+}
+
+/// The file a `PATCH` addresses: the `path` the query names or the one the body
+/// names, since a caller may reasonably use either.
+///
+/// Naming one file in the query and another in the body means the caller does
+/// not know which file it is writing. Answering that by writing the entry point —
+/// what ignoring the query did — silently destroys the wrong file, so it is
+/// refused instead. With neither, the item's entry-point file is written, as it
+/// always was.
+fn patch_target_path(
+    query: Option<&str>,
+    body: Option<&str>,
+) -> std::result::Result<Option<String>, ApiError> {
+    let query = query.filter(|path| !path.is_empty());
+    let body = body.filter(|path| !path.is_empty());
+    if let (Some(query), Some(body)) = (query, body) {
+        if query != body {
+            return Err(bad_request(
+                "path in the query and path in the body name different files",
+            ));
+        }
+    }
+    Ok(query.or(body).map(str::to_string))
 }
 
 #[derive(Deserialize)]
@@ -9207,6 +9231,44 @@ mod tests {
         let body = std::str::from_utf8(&bytes).unwrap();
         assert!(body.starts_with("event: resync.required\ndata: {}\n\n"));
         assert!(body.contains("event: chat.busy\ndata: {\"busy\":false}"));
+    }
+
+    /// A `PATCH` may name its file in the query or the body. Reading only the
+    /// body turned `?path=references/hf.md` with a body of `{content}` into a
+    /// write of `SKILL.md` — a silent overwrite of a file the caller never
+    /// named — and naming two different files is still a refusal, not a coin
+    /// toss over which one is destroyed.
+    #[test]
+    fn a_library_patch_reads_one_path_from_the_query_or_the_body() {
+        let chosen =
+            |query: Option<&str>, body: Option<&str>| patch_target_path(query, body).ok().flatten();
+        assert_eq!(
+            chosen(Some("references/hf.md"), None).as_deref(),
+            Some("references/hf.md")
+        );
+        assert_eq!(
+            chosen(None, Some("references/hf.md")).as_deref(),
+            Some("references/hf.md")
+        );
+        assert_eq!(
+            chosen(Some("references/hf.md"), Some("references/hf.md")).as_deref(),
+            Some("references/hf.md")
+        );
+        // Neither: the entry point, exactly as before.
+        assert_eq!(chosen(None, None), None);
+        assert_eq!(chosen(Some(""), Some("")), None);
+
+        for (query, body) in [
+            (Some("references/hf.md"), Some("SKILL.md")),
+            (Some("SKILL.md"), Some("references/hf.md")),
+            (Some("a.md"), Some("b.md")),
+        ] {
+            assert_eq!(
+                patch_target_path(query, body).err().map(|e| e.0),
+                Some(StatusCode::BAD_REQUEST),
+                "{query:?} vs {body:?}"
+            );
+        }
     }
 
     #[tokio::test]
