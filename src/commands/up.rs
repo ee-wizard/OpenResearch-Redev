@@ -266,9 +266,6 @@ pub async fn run(args: UpArgs) -> Result<()> {
     // Seed the editable team library so later reads (harness shims, session
     // skills, and the library API) operate from the data dir copies.
     local::library::ensure_team_library()?;
-    if let Err(err) = local::library::ensure_supervisor_skills() {
-        eprintln!("orx up: supervisor skills not available: {err}");
-    }
     local::handbook::ensure_handbook()?;
 
     // Open early so the schema exists before any request or agent spawn.
@@ -335,6 +332,7 @@ pub async fn run(args: UpArgs) -> Result<()> {
     }
 
     spawn_agent_preflight();
+    spawn_supervisor_skills_sync();
     // Deliver explicitly registered run wake-ups once their chat becomes idle.
     tokio::spawn(local::chat::watch_runs(
         state.chat.clone(),
@@ -5042,6 +5040,16 @@ fn spawn_agent_preflight() {
             eprintln!(
                 "orx up: warning: no coding agent ready — install Claude Code, Codex, OpenCode, Cursor or Antigravity, then connect a local model or sign in."
             );
+        }
+    });
+}
+
+/// Clone or pull the Supervisor-Skills repository in a background blocking
+/// task so that `orx up` startup is not delayed by the git network call.
+fn spawn_supervisor_skills_sync() {
+    tokio::task::spawn_blocking(|| {
+        if let Err(err) = crate::local::library::ensure_supervisor_skills() {
+            eprintln!("orx up: supervisor skills not available: {err}");
         }
     });
 }
