@@ -5410,10 +5410,8 @@ mod tests {
     /// enforcement has to be on for the connection that runs the delete.
     #[test]
     fn deleting_a_project_drops_its_gists_and_papers_but_keeps_global_gists() {
-        let dir = std::env::temp_dir().join(format!(
-            "orx-store-project-delete-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("orx-store-project-delete-{}", uuid::Uuid::new_v4()));
         let store = Store::open_at(dir.clone()).unwrap();
         store
             .create_local_project(&LocalProject {

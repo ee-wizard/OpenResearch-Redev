@@ -92,16 +92,17 @@ fn build_skills() -> Result<Vec<ChatAttachmentSkill>> {
         .into_iter()
         .map(|s| (s.name, s.description))
         .collect();
-    for item in library::list_library_items(Some(library::LibraryKind::Skill), library::LibrarySource::BuiltIn)? {
+    for item in library::list_library_items(
+        Some(library::LibraryKind::Skill),
+        library::LibrarySource::BuiltIn,
+    )? {
         let content = read_skill_body(&item.file_path);
         skills.push(ChatAttachmentSkill {
             id: item.id.clone(),
             name: item.name.clone(),
             source: "builtin".to_string(),
             file_path: item.file_path.to_string_lossy().into_owned(),
-            description: builtin_descs
-                .get(item.id.as_str())
-                .map(|d| d.to_string()),
+            description: builtin_descs.get(item.id.as_str()).map(|d| d.to_string()),
             content_preview: content.as_deref().map(preview_of),
             scope: Some("global".to_string()),
             content,
@@ -109,7 +110,10 @@ fn build_skills() -> Result<Vec<ChatAttachmentSkill>> {
     }
 
     // Team-owned library skills.
-    for item in library::list_library_items(Some(library::LibraryKind::Skill), library::LibrarySource::Team)? {
+    for item in library::list_library_items(
+        Some(library::LibraryKind::Skill),
+        library::LibrarySource::Team,
+    )? {
         let content = read_skill_body(&item.file_path);
         let description = frontmatter_description(&item.file_path);
         skills.push(ChatAttachmentSkill {
@@ -125,7 +129,10 @@ fn build_skills() -> Result<Vec<ChatAttachmentSkill>> {
     }
 
     // Supervisor skills cloned from the Supervisor-Skills repository.
-    for item in library::list_library_items(Some(library::LibraryKind::Skill), library::LibrarySource::Supervisor)? {
+    for item in library::list_library_items(
+        Some(library::LibraryKind::Skill),
+        library::LibrarySource::Supervisor,
+    )? {
         let content = read_skill_body(&item.file_path);
         let description = frontmatter_description(&item.file_path);
         skills.push(ChatAttachmentSkill {

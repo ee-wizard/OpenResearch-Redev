@@ -900,7 +900,10 @@ fn router(state: AppState, remote_auth: Option<RemoteAuth>) -> Router {
                 .delete(delete_library_item),
         )
         .route("/api/handbook", get(list_handbook))
-        .route("/api/handbook/{id}", get(get_handbook).patch(update_handbook))
+        .route(
+            "/api/handbook/{id}",
+            get(get_handbook).patch(update_handbook),
+        )
         .route("/api/chat/attachments", get(list_chat_attachments))
         .route(
             "/api/chat/sessions",
@@ -1381,7 +1384,9 @@ struct LibrarySourceQ {
     source: Option<String>,
 }
 
-fn parse_library_kind(s: &str) -> std::result::Result<crate::local::library::LibraryKind, ApiError> {
+fn parse_library_kind(
+    s: &str,
+) -> std::result::Result<crate::local::library::LibraryKind, ApiError> {
     match s {
         "skill" => Ok(crate::local::library::LibraryKind::Skill),
         "agent" => Ok(crate::local::library::LibraryKind::Agent),
@@ -1402,11 +1407,7 @@ fn parse_library_source(
 }
 
 async fn list_library(Query(q): Query<LibraryQ>) -> ApiResult {
-    let kind = q
-        .kind
-        .as_deref()
-        .map(parse_library_kind)
-        .transpose()?;
+    let kind = q.kind.as_deref().map(parse_library_kind).transpose()?;
     let source = q
         .source
         .as_deref()
@@ -1509,7 +1510,9 @@ async fn delete_library_item(
     if source != crate::local::library::LibrarySource::Team
         && source != crate::local::library::LibrarySource::Supervisor
     {
-        return Err(bad_request("only team or supervisor library items can be deleted"));
+        return Err(bad_request(
+            "only team or supervisor library items can be deleted",
+        ));
     }
     let deleted = tokio::task::spawn_blocking(move || {
         crate::local::library::delete_library_item(kind, &id, source)
@@ -1718,12 +1721,10 @@ async fn pick_project_folder() -> ApiResult {
         Ok(path) => Ok(Json(json!({
             "path": path.map(|path| path.to_string_lossy().into_owned()),
         }))),
-        Err(error) if error.1.contains("No native folder picker is available") => {
-            Ok(Json(json!({
-                "fallback": true,
-                "error": error.1,
-            })))
-        }
+        Err(error) if error.1.contains("No native folder picker is available") => Ok(Json(json!({
+            "fallback": true,
+            "error": error.1,
+        }))),
         Err(error) => Err(error),
     }
 }

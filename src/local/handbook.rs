@@ -137,8 +137,13 @@ pub fn list_chapters() -> Result<Vec<Chapter>> {
 pub fn get_chapter(id: &str) -> Result<String> {
     ensure_handbook()?;
     let chapter = find_chapter(id)?;
-    std::fs::read_to_string(&chapter.file_path)
-        .map_err(|e| anyhow!("Could not read chapter {}: {}", chapter.file_path.display(), e))
+    std::fs::read_to_string(&chapter.file_path).map_err(|e| {
+        anyhow!(
+            "Could not read chapter {}: {}",
+            chapter.file_path.display(),
+            e
+        )
+    })
 }
 
 /// Write new markdown content for a chapter and update its title in

@@ -293,10 +293,9 @@ fn references(data: &Path, mappings: &[(PathBuf, PathBuf)]) -> Result<References
             let repo = PathBuf::from(&repo_path);
             let moved_repo = mapped(&repo, mappings);
             if moved_repo != repo {
-                result.projects.push((
-                    repo_path.clone(),
-                    moved_repo.to_string_lossy().into_owned(),
-                ));
+                result
+                    .projects
+                    .push((repo_path.clone(), moved_repo.to_string_lossy().into_owned()));
             }
             repos.insert(moved_repo);
             // The project dir roots the session worktrees and the team papers;

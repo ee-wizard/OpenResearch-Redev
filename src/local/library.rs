@@ -265,9 +265,11 @@ pub fn write_library_content(
         (LibraryKind::Skill, LibrarySource::BuiltIn) => {
             library_dir().join("skills").join(id).join("SKILL.md")
         }
-        (LibraryKind::Skill, LibrarySource::Team) => {
-            library_dir().join("skills").join("team").join(id).join("SKILL.md")
-        }
+        (LibraryKind::Skill, LibrarySource::Team) => library_dir()
+            .join("skills")
+            .join("team")
+            .join(id)
+            .join("SKILL.md"),
         (LibraryKind::Skill, LibrarySource::Supervisor) => {
             supervisor_skills_base().join(id).join("SKILL.md")
         }
@@ -278,7 +280,9 @@ pub fn write_library_content(
             library_dir().join("agents").join(id).join("shim.md")
         }
         (_, LibrarySource::Project) => {
-            return Err(anyhow!("Project-scoped library items are not editable here"))
+            return Err(anyhow!(
+                "Project-scoped library items are not editable here"
+            ))
         }
         (LibraryKind::Agent, LibrarySource::Supervisor) => {
             return Err(anyhow!("Supervisor source only supports skills"))
@@ -502,7 +506,11 @@ fn list_agents(source: LibrarySource) -> Result<Vec<LibraryItem>> {
     Ok(items)
 }
 
-fn list_team_dirs(dir: &Path, kind: LibraryKind, source: LibrarySource) -> Result<Vec<LibraryItem>> {
+fn list_team_dirs(
+    dir: &Path,
+    kind: LibraryKind,
+    source: LibrarySource,
+) -> Result<Vec<LibraryItem>> {
     let mut items = Vec::new();
     if !dir.exists() {
         return Ok(items);
@@ -623,9 +631,7 @@ fn validate_team_id(kind: LibraryKind, id: &str) -> Result<()> {
         LibraryKind::Skill if is_builtin_skill(id) => {
             Err(anyhow!("'{id}' is a built-in skill name"))
         }
-        LibraryKind::Agent if is_builtin_agent(id) => {
-            Err(anyhow!("'{id}' is a built-in agent id"))
-        }
+        LibraryKind::Agent if is_builtin_agent(id) => Err(anyhow!("'{id}' is a built-in agent id")),
         _ => Ok(()),
     }
 }
@@ -666,7 +672,8 @@ pub fn read_codex_legacy_prompt() -> String {
         .join("agents")
         .join("codex")
         .join("legacy-prompt.md");
-    std::fs::read_to_string(&path).unwrap_or_else(|_| crate::local::harness::CODEX_PROMPT.to_string())
+    std::fs::read_to_string(&path)
+        .unwrap_or_else(|_| crate::local::harness::CODEX_PROMPT.to_string())
 }
 
 /// Return the path to the editable copy of a built-in skill package, if it has
@@ -690,7 +697,9 @@ mod tests {
 
     impl TmpDataDir {
         fn new() -> Self {
-            let guard = ENV_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let guard = ENV_LOCK
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             let path = std::env::temp_dir().join(format!(
                 "orx-library-test-{}-{}",
                 std::process::id(),
@@ -745,8 +754,12 @@ mod tests {
 
         // Supervisor skill ids are directory names from the cloned repo, so the
         // guard must not reject an id a real repository could contain.
-        assert!(get_library_item(LibraryKind::Skill, "Supervisor_Skills.v2", LibrarySource::Supervisor)
-            .is_ok());
+        assert!(get_library_item(
+            LibraryKind::Skill,
+            "Supervisor_Skills.v2",
+            LibrarySource::Supervisor
+        )
+        .is_ok());
     }
 
     #[test]
