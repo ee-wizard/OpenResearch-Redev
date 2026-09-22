@@ -1190,7 +1190,7 @@
   "prompt_gists_new": "Nuevo fragmento",
   "prompt_gists_name": "Nombre",
   "prompt_gists_content": "Contenido",
-  "prompt_gists_description": "Descripción",
+  "prompt_gists_description": "Fragmentos de prompts reutilizables, disponibles en el compositor de cada proyecto.",
   "prompt_gists_tags": "Etiquetas (separadas por comas)",
   "prompt_gists_create": "Crear",
   "prompt_gists_save": "Guardar",
@@ -1252,5 +1252,14 @@
   "team_papers_delete_confirm": "Delete “{title}”? This cannot be undone.",
   "team_papers_source_link": "Open source",
   "team_shell_title": "Biblioteca del equipo",
-  "team_shell_description": "Skills, agentes, capítulos del manual, fragmentos de prompts y papers del equipo. Compartidos entre proyectos y disponibles con o sin un proyecto abierto."
+  "team_shell_description": "Skills, agentes, capítulos del manual, fragmentos de prompts y papers del equipo. Compartidos entre proyectos y disponibles con o sin un proyecto abierto.",
+  "handbook_description": "La guía de escritura e investigación del equipo. Los capítulos también pueden pertenecer a un solo proyecto.",
+  "handbook_new": "Nuevo capítulo",
+  "handbook_title_placeholder": "Título del capítulo",
+  "handbook_title_required": "Se requiere un título de capítulo.",
+  "handbook_delete": "Eliminar capítulo",
+  "handbook_delete_confirm": "¿Eliminar “{title}”? Esta acción no se puede deshacer.",
+  "handbook_scope_global": "Global",
+  "handbook_scope_project": "Proyecto",
+  "projects_home_team_resources": "Recursos del equipo"
 }

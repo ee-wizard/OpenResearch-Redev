@@ -1190,7 +1190,7 @@
   "prompt_gists_new": "گزیدهٔ جدید",
   "prompt_gists_name": "نام",
   "prompt_gists_content": "محتوا",
-  "prompt_gists_description": "توضیحات",
+  "prompt_gists_description": "گزیده‌های پرامپت قابل بازاستفاده، در هر پروژه در دسترس.",
   "prompt_gists_tags": "برچسب‌ها (جداشده با کاما)",
   "prompt_gists_create": "ایجاد",
   "prompt_gists_save": "ذخیره",
@@ -1252,5 +1252,14 @@
   "team_papers_delete_confirm": "Delete “{title}”? This cannot be undone.",
   "team_papers_source_link": "Open source",
   "team_shell_title": "کتابخانهٔ تیم",
-  "team_shell_description": "مهارت‌ها، عامل‌ها، فصل‌های راهنما، گزیده‌های پرامپت و مقاله‌های تیمی. میان پروژه‌ها مشترک‌اند و با یا بدون پروژهٔ باز در دسترس‌اند."
+  "team_shell_description": "مهارت‌ها، عامل‌ها، فصل‌های راهنما، گزیده‌های پرامپت و مقاله‌های تیمی. میان پروژه‌ها مشترک‌اند و با یا بدون پروژهٔ باز در دسترس‌اند.",
+  "handbook_description": "راهنمای نگارش و پژوهش تیم. فصل‌ها می‌توانند به یک پروژه نیز تعلق داشته باشند.",
+  "handbook_new": "فصل جدید",
+  "handbook_title_placeholder": "عنوان فصل",
+  "handbook_title_required": "عنوان فصل لازم است.",
+  "handbook_delete": "حذف فصل",
+  "handbook_delete_confirm": "«{title}» حذف شود؟ این کار بازگشت‌ناپذیر است.",
+  "handbook_scope_global": "سراسری",
+  "handbook_scope_project": "پروژه",
+  "projects_home_team_resources": "منابع تیم"
 }

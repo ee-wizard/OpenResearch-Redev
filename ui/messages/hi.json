@@ -1190,7 +1190,7 @@
   "prompt_gists_new": "नया स्निपेट",
   "prompt_gists_name": "नाम",
   "prompt_gists_content": "सामग्री",
-  "prompt_gists_description": "विवरण",
+  "prompt_gists_description": "पुन: उपयोगी प्रॉम्प्ट स्निपेट, हर प्रोजेक्ट के कंपोज़र में उपलब्ध.",
   "prompt_gists_tags": "टैग (कॉमा से अलग)",
   "prompt_gists_create": "बनाएं",
   "prompt_gists_save": "सेव करें",
@@ -1252,5 +1252,14 @@
   "team_papers_delete_confirm": "Delete “{title}”? This cannot be undone.",
   "team_papers_source_link": "Open source",
   "team_shell_title": "टीम लाइब्रेरी",
-  "team_shell_description": "टीम-व्यापी स्किल, एजेंट, हैंडबुक अध्याय, प्रॉम्प्ट स्निपेट और पेपर. सभी प्रोजेक्ट में साझा और प्रोजेक्ट खुले बिना भी उपलब्ध।"
+  "team_shell_description": "टीम-व्यापी स्किल, एजेंट, हैंडबुक अध्याय, प्रॉम्प्ट स्निपेट और पेपर. सभी प्रोजेक्ट में साझा और प्रोजेक्ट खुले बिना भी उपलब्ध।",
+  "handbook_description": "टीम-व्यापी लेखन और शोध गाइड. अध्याय किसी एक प्रोजेक्ट के भी हो सकते हैं.",
+  "handbook_new": "नया अध्याय",
+  "handbook_title_placeholder": "अध्याय शीर्षक",
+  "handbook_title_required": "अध्याय शीर्षक आवश्यक है.",
+  "handbook_delete": "अध्याय हटाएं",
+  "handbook_delete_confirm": "“{title}” हटाएं? यह वापस नहीं किया जा सकता.",
+  "handbook_scope_global": "वैश्विक",
+  "handbook_scope_project": "प्रोजेक्ट",
+  "projects_home_team_resources": "टीम संसाधन"
 }

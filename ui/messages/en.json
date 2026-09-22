@@ -1190,7 +1190,7 @@
   "prompt_gists_new": "New gist",
   "prompt_gists_name": "Name",
   "prompt_gists_content": "Content",
-  "prompt_gists_description": "Description",
+  "prompt_gists_description": "Reusable prompt snippets, available to the composer in every project.",
   "prompt_gists_tags": "Tags (comma separated)",
   "prompt_gists_create": "Create",
   "prompt_gists_save": "Save",
@@ -1252,5 +1252,14 @@
   "team_papers_delete_confirm": "Delete “{title}”? This cannot be undone.",
   "team_papers_source_link": "Open source",
   "team_shell_title": "Team Library",
-  "team_shell_description": "Team-wide skills, agents, handbook chapters, prompt gists, and papers. Shared across projects and available with or without an open project."
+  "team_shell_description": "Team-wide skills, agents, handbook chapters, prompt gists, and papers. Shared across projects and available with or without an open project.",
+  "handbook_description": "The team-wide writing and research guide. Chapters can also belong to a single project.",
+  "handbook_new": "New chapter",
+  "handbook_title_placeholder": "Chapter title",
+  "handbook_title_required": "A chapter title is required.",
+  "handbook_delete": "Delete chapter",
+  "handbook_delete_confirm": "Delete “{title}”? This cannot be undone.",
+  "handbook_scope_global": "Global",
+  "handbook_scope_project": "Project",
+  "projects_home_team_resources": "Team resources"
 }

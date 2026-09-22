@@ -1,10 +1,8 @@
 import { setScopedQueryData } from "./queries/client";
 import { isCancelledError, useQuery } from "@tanstack/react-query";
 import { listProjectsQuery, getUiStateQuery } from "./queries/projects";
-import { useRouteContext, Link, useNavigate, type ErrorComponentProps } from "@tanstack/react-router";
+import { useRouteContext, Link, useNavigate, useSearch, type ErrorComponentProps } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
-import type { LucideIcon } from "lucide-react";
-import { Blocks, Book, FileText, Lightbulb } from "lucide-react";
 
 import { useRuntime } from "./RemoteRuntime";
 
@@ -23,6 +21,11 @@ import { OfflineBanner } from "./components/OfflineBanner";
 import { RemoteStatus } from "./components/RemoteStatus";
 import { UpdateBanner, useUpdateStatus } from "./components/UpdateBanner";
 import { Button, showAlert, Spinner } from "./components/ui";
+import {
+  TEAM_SECTION_ICONS,
+  TEAM_SECTION_LABELS,
+  TEAM_SECTIONS,
+} from "./teamSections";
 
 export function RoutePending() {
   return <div className="flex flex-1 h-full items-center justify-center"><Spinner /></div>;
@@ -111,7 +114,7 @@ export function ProjectsPage() {
               remote={runtime.kind === "ssh"}
               projects={projects}
               onOpen={openProject}
-              onOpenTeamLibrary={() => void navigate({ to: "/team" })}
+              onOpenTeamSection={(section) => void navigate({ to: "/team", search: { section } })}
               onCreated={(project, publicationError) => {
                 if (publicationError) {
                   showAlert(publicationError, "error");
@@ -126,28 +129,13 @@ export function ProjectsPage() {
   );
 }
 
-const TEAM_SECTIONS = ["library", "handbook", "promptGists", "teamPapers"] as const;
-type TeamSection = (typeof TEAM_SECTIONS)[number];
-
-const TEAM_SECTION_ICONS: Record<TeamSection, LucideIcon> = {
-  library: Blocks,
-  handbook: Book,
-  promptGists: Lightbulb,
-  teamPapers: FileText,
-};
-
-// Held as functions so a locale switch relabels the nav on the next render.
-const TEAM_SECTION_LABELS: Record<TeamSection, () => string> = {
-  library: m.library_title,
-  handbook: m.handbook_title,
-  promptGists: m.prompt_gists_title,
-  teamPapers: m.team_papers_title,
-};
-
 /** Project-independent destination for the team-wide panels, so the Library,
- * Handbook, Prompt Gists, and Team Papers stay reachable with zero projects. */
+ * Handbook, Prompt Gists, and Team Papers stay reachable with zero projects.
+ * The active panel lives in the URL so the home entry cards can deep-link. */
 export function TeamPage() {
-  const [section, setSection] = useState<TeamSection>("library");
+  const { section } = useSearch({ from: "/team" });
+  const navigate = useNavigate();
+  const active = section ?? "library";
   useEffect(() => { document.title = m.team_shell_title(); }, []);
   return (
     <div className="app flex h-full flex-col bg-canvas">
@@ -169,9 +157,9 @@ export function TeamPage() {
               <button
                 key={id}
                 type="button"
-                aria-current={section === id ? "page" : undefined}
-                className={`flex items-center gap-2.5 rounded-md px-2.5 py-[7px] text-start text-base text-text [&:hover:not(.active)]:bg-surface [&.active]:bg-panel [&.active]:font-medium ${section === id ? "active" : ""}`}
-                onClick={() => setSection(id)}
+                aria-current={active === id ? "page" : undefined}
+                className={`flex items-center gap-2.5 rounded-md px-2.5 py-[7px] text-start text-base text-text [&:hover:not(.active)]:bg-surface [&.active]:bg-panel [&.active]:font-medium ${active === id ? "active" : ""}`}
+                onClick={() => void navigate({ to: "/team", search: { section: id } })}
               >
                 <Icon size={15} />
                 <span>{TEAM_SECTION_LABELS[id]()}</span>
@@ -180,13 +168,13 @@ export function TeamPage() {
           })}
         </nav>
         <section className="flex min-w-0 min-h-0 flex-1 flex-col">
-          {section === "handbook" ? (
+          {active === "handbook" ? (
             <HandbookTab />
-          ) : section === "library" ? (
+          ) : active === "library" ? (
             <div className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable_both-edges]">
               <LibraryTab />
             </div>
-          ) : section === "promptGists" ? (
+          ) : active === "promptGists" ? (
             <PromptGistsTab />
           ) : (
             <TeamPapersTab />

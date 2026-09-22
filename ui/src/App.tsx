@@ -1937,7 +1937,7 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
               </TabBody>
             ) : rightTab === "handbook" ? (
               <TabBody className="p-0">
-                <HandbookTab />
+                <HandbookTab projectId={activeProject?.id ?? null} />
               </TabBody>
             ) : rightTab === "teamPapers" ? (
               <TabBody>

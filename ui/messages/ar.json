@@ -1190,7 +1190,7 @@
   "prompt_gists_new": "مقتطف جديد",
   "prompt_gists_name": "الاسم",
   "prompt_gists_content": "المحتوى",
-  "prompt_gists_description": "الوصف",
+  "prompt_gists_description": "مقتطفات أوامر قابلة لإعادة الاستخدام، متاحة في كل مشروع.",
   "prompt_gists_tags": "الوسوم (مفصولة بفواصل)",
   "prompt_gists_create": "إنشاء",
   "prompt_gists_save": "حفظ",
@@ -1252,5 +1252,14 @@
   "team_papers_delete_confirm": "Delete “{title}”? This cannot be undone.",
   "team_papers_source_link": "Open source",
   "team_shell_title": "مكتبة الفريق",
-  "team_shell_description": "مهارات الفريق والوكلاء وفصول الدليل ومقتطفات الأوامر والأوراق. مشتركة بين المشاريع ومتاحة سواء كان هناك مشروع مفتوح أم لا."
+  "team_shell_description": "مهارات الفريق والوكلاء وفصول الدليل ومقتطفات الأوامر والأوراق. مشتركة بين المشاريع ومتاحة سواء كان هناك مشروع مفتوح أم لا.",
+  "handbook_description": "دليل الكتابة والبحث المشترك بين الفريق. يمكن أن تنتمي الفصول أيضًا إلى مشروع واحد.",
+  "handbook_new": "فصل جديد",
+  "handbook_title_placeholder": "عنوان الفصل",
+  "handbook_title_required": "عنوان الفصل مطلوب.",
+  "handbook_delete": "حذف الفصل",
+  "handbook_delete_confirm": "حذف “{title}”؟ لا يمكن التراجع عن هذا.",
+  "handbook_scope_global": "عالمي",
+  "handbook_scope_project": "المشروع",
+  "projects_home_team_resources": "موارد الفريق"
 }

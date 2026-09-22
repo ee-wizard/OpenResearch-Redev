@@ -41,6 +41,13 @@ const SKILL_ROW_CLASS_NAME =
   "flex items-start gap-3 py-2.5 border-t border-t-border first:border-t-0";
 const SKILL_NAME_CLASS_NAME = "text-sm font-normal text-text";
 const ROW_DETAIL_CLASS_NAME = "mt-1 mb-0 text-sm leading-relaxed text-text";
+const LIBRARY_PATH_CLASS_NAME = "m-0 text-sm leading-relaxed text-text wrap-anywhere";
+const LIBRARY_CARD_CLASS_NAME =
+  "flex h-full min-w-0 flex-col gap-2 rounded-lg border border-border bg-background p-3";
+/** Container-query columns: the Library lives in panes of very different widths
+ * (a resizable middle pane, or the wide standalone shell). */
+const LIBRARY_GRID_CLASS_NAME = "grid grid-cols-1 gap-3 @2xl:grid-cols-2 @5xl:grid-cols-3";
+const LIBRARY_CARD_FULL_SPAN_CLASS_NAME = "@2xl:col-span-2 @5xl:col-span-3";
 
 /** Read a File into base64 (strips the `data:...;base64,` prefix). */
 function fileToBase64(file: File): Promise<string> {
@@ -546,46 +553,92 @@ function LibraryRow({
   }, [item, deleteMutation, onError]);
 
   return (
-    <div className={SKILL_ROW_CLASS_NAME}>
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2">
-          {kindIcon(item.kind)}
-          <span className="text-base font-medium text-text">{item.name}</span>
-          {sourceBadge(item.source)}
+    <div
+      className={`${LIBRARY_CARD_CLASS_NAME}${
+        editing ? ` ${LIBRARY_CARD_FULL_SPAN_CLASS_NAME}` : ""
+      }`}
+    >
+      <div className="flex items-start gap-2">
+        <div className="flex min-w-0 flex-1 flex-col gap-1">
+          <div className="flex flex-wrap items-center gap-2">
+            {kindIcon(item.kind)}
+            <span className="text-base font-medium text-text">{item.name}</span>
+            {sourceBadge(item.source)}
+          </div>
+          <p className={LIBRARY_PATH_CLASS_NAME}>{item.filePath}</p>
         </div>
-        <p className={ROW_DETAIL_CLASS_NAME}>{item.filePath}</p>
-        {editing && (
-          <LibraryEditor
-            content={draft}
-            onChange={setDraft}
-            onSave={save}
-            onRevert={revert}
-            busy={updateMutation.isPending}
-          />
-        )}
-      </div>
-      <div className="shrink-0 flex items-center gap-1">
-        <IconButton
-          size="small"
-          data-tip={m.prompt_gists_edit()}
-          aria-label={m.prompt_gists_edit()}
-          onClick={startEdit}
-          disabled={editing}
-        >
-          <FileText size={13} />
-        </IconButton>
-        {(item.source === "team" || item.source === "supervisor") && (
+        <div className="shrink-0 flex items-center gap-1">
           <IconButton
             size="small"
-            data-tip={m.prompt_gists_delete()}
-            aria-label={m.prompt_gists_delete()}
-            onClick={remove}
-            disabled={deleteMutation.isPending}
+            data-tip={m.prompt_gists_edit()}
+            aria-label={m.prompt_gists_edit()}
+            onClick={startEdit}
+            disabled={editing}
           >
-            <Trash2 size={13} />
+            <FileText size={13} />
           </IconButton>
-        )}
+          {(item.source === "team" || item.source === "supervisor") && (
+            <IconButton
+              size="small"
+              data-tip={m.prompt_gists_delete()}
+              aria-label={m.prompt_gists_delete()}
+              onClick={remove}
+              disabled={deleteMutation.isPending}
+            >
+              <Trash2 size={13} />
+            </IconButton>
+          )}
+        </div>
       </div>
+      {editing && (
+        <LibraryEditor
+          content={draft}
+          onChange={setDraft}
+          onSave={save}
+          onRevert={revert}
+          busy={updateMutation.isPending}
+        />
+      )}
+    </div>
+  );
+}
+
+/** One responsive grid per library section, sub-grouped by source so built-in,
+ * team, and supervisor items stay distinguishable. */
+function LibraryGrid({
+  items,
+  onError,
+}: {
+  items: LibraryItem[];
+  onError: (message: string) => void;
+}) {
+  const groups = useMemo(
+    () =>
+      SKILL_SOURCE_ORDER.map((source) => [source, items.filter((item) => item.source === source)] as const)
+        .filter(([, group]) => group.length > 0),
+    [items],
+  );
+
+  return (
+    <div className="mt-1 flex flex-col gap-4">
+      {groups.map(([source, group]) => (
+        <div key={source}>
+          <div className="mb-2 text-xs font-medium tracking-[0.06em] text-muted uppercase">
+            {SKILL_SOURCE_LABELS[source]}
+          </div>
+          <div className={LIBRARY_GRID_CLASS_NAME}>
+            <StaggerList className="contents" itemHover="lift">
+              {group.map((item) => (
+                <LibraryRow
+                  key={`${item.kind}-${item.id}-${item.source}`}
+                  item={item}
+                  onError={onError}
+                />
+              ))}
+            </StaggerList>
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -668,7 +721,7 @@ function LibrarySection({
   const loadError = builtinQuery.error?.message ?? teamQuery.error?.message;
 
   return (
-    <section className={CARD_CLASS_NAME}>
+    <section className={`${CARD_CLASS_NAME} @container`}>
       <div className="flex items-baseline gap-2.5">
         <h3>{title}</h3>
         <Button
@@ -701,13 +754,7 @@ function LibrarySection({
       ) : items.length === 0 ? (
         <div className="pt-3 text-sm text-subtext">{m.library_empty()}</div>
       ) : (
-        <div className="flex flex-col mt-1">
-          <StaggerList className="contents" itemHover="lift">
-            {items.map((item) => (
-              <LibraryRow key={`${item.kind}-${item.id}-${item.source}`} item={item} onError={setError} />
-            ))}
-          </StaggerList>
-        </div>
+        <LibraryGrid items={items} onError={setError} />
       )}
       <LibraryCreateRow kind={kind} onDone={() => { void teamQuery.refetch(); }} onError={setError} />
     </section>
@@ -862,7 +909,7 @@ function SupervisorSection() {
   const loadError = query.error?.message;
 
   return (
-    <section className={CARD_CLASS_NAME}>
+    <section className={`${CARD_CLASS_NAME} @container`}>
       <div className="flex items-baseline gap-2.5">
         <h3>{m.library_supervisor()}</h3>
         <Button
@@ -892,15 +939,7 @@ function SupervisorSection() {
       ) : items.length === 0 ? (
         <div className="pt-3 text-sm text-subtext">{m.library_supervisor_empty()}</div>
       ) : (
-        <div className="flex flex-col mt-1">
-          {items.map((item) => (
-            <LibraryRow
-              key={`${item.kind}-${item.id}-${item.source}`}
-              item={item}
-              onError={setError}
-            />
-          ))}
-        </div>
+        <LibraryGrid items={items} onError={setError} />
       )}
     </section>
   );
@@ -910,7 +949,7 @@ function SupervisorSection() {
  * uploaded user skills and LaTeX templates that already lived here. */
 export function LibraryTab() {
   return (
-    <div className="settings-view max-w-readable my-0 mx-auto pt-6 px-8 pb-15 [&_h1]:mt-0 [&_h1]:mx-0 [&_h1]:mb-1.5 [&_h1]:text-3xl">
+    <div className="settings-view max-w-290 my-0 mx-auto pt-6 px-8 pb-15 [&_h1]:mt-0 [&_h1]:mx-0 [&_h1]:mb-1.5 [&_h1]:text-3xl">
       <h1>{m.library_title()}</h1>
       <p className="mt-0 mx-0 mb-5 text-base leading-relaxed text-text">
         {m.library_description()}

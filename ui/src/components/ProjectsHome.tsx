@@ -7,6 +7,13 @@ import { Blocks, Plus, Trash2 } from "lucide-react";
 import { GitHubMark } from "./BackendLogos";
 import { useEffect, useRef, useState } from "react";
 import {
+  TEAM_SECTION_DESCRIPTIONS,
+  TEAM_SECTION_ICONS,
+  TEAM_SECTION_LABELS,
+  TEAM_SECTIONS,
+  type TeamSection,
+} from "../teamSections";
+import {
   deleteProject,
   fmtNumber,
   timeAgo,
@@ -214,14 +221,14 @@ export function ProjectsHome({
   onOpen,
   onCreated,
   onDeleted,
-  onOpenTeamLibrary,
+  onOpenTeamSection,
   remote = false,
 }: {
   projects: Project[];
   onOpen: (id: string) => void;
   onCreated: (project: Project, githubPublicationError: string | null) => void;
   onDeleted: (id: string) => void;
-  onOpenTeamLibrary: () => void;
+  onOpenTeamSection: (section: TeamSection) => void;
   remote?: boolean;
 }) {
   const [modalOpen, setModalOpen] = useState(false);
@@ -252,7 +259,7 @@ export function ProjectsHome({
         <div className="home-head flex items-center justify-between gap-3 mb-4.5 [&_h2]:m-0 [&_h2]:text-4xl [&_h2]:tracking-[-0.02em] [@media((max-width:_520px))]:items-start [@media((max-width:_520px))]:flex-col">
           <h2>{m.projects_home_projects()}</h2>
           <div className="flex flex-wrap items-center gap-2">
-            <Button onClick={onOpenTeamLibrary}>
+            <Button onClick={() => onOpenTeamSection("library")}>
               <Blocks size={15} /> {m.team_shell_title()}
             </Button>
             <Button
@@ -388,6 +395,34 @@ export function ProjectsHome({
             )}
           </div>
         </Card>
+
+        {/* Secondary, always available — even with no projects in the list above. */}
+        <section className="mt-8">
+          <h3 className="mt-0 mb-3 text-sm font-medium tracking-[0.06em] text-text uppercase">
+            {m.projects_home_team_resources()}
+          </h3>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            {TEAM_SECTIONS.map((id) => {
+              const Icon = TEAM_SECTION_ICONS[id];
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => onOpenTeamSection(id)}
+                  className="flex h-full min-w-0 flex-col items-start gap-2 rounded-lg border border-border bg-background p-4 text-start transition-[transform,box-shadow,border-color] duration-200 ease-standard motion-safe:hover:-translate-y-0.5 hover:border-primary hover:shadow-elevated focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-text focus-visible:outline-offset-2"
+                >
+                  <span className="flex items-center gap-2 text-text">
+                    <Icon size={16} />
+                    <span className="text-base font-medium">{TEAM_SECTION_LABELS[id]()}</span>
+                  </span>
+                  <span className="text-sm leading-relaxed text-subtext">
+                    {TEAM_SECTION_DESCRIPTIONS[id]()}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </section>
       </AnimatedSection>
 
       {modalOpen && (

@@ -1929,22 +1929,55 @@ export const deleteLibraryItem = (kind: LibraryKind, id: string, source: Library
 
 // --- handbook ----------------------------------------------------------------
 
+/** A chapter is either team-wide (`global`) or owned by one project. A project
+ * listing returns both kinds, each tagged with its own scope. */
+export type HandbookScope = "global" | "project";
+
 export interface HandbookChapter {
   id: string;
   title: string;
+  scope: HandbookScope;
+  projectId: string | null;
   filePath: string;
 }
 
-export const listHandbookChapters = (signal?: AbortSignal) =>
-  get<{ chapters: HandbookChapter[] }>("/api/handbook", signal).then((r) => r.chapters);
+/** `projectId` selects the project scope; omitting it addresses globals only. */
+const handbookQuery = (projectId?: string | null) =>
+  projectId ? `?projectId=${encodeURIComponent(projectId)}` : "";
 
-export const getHandbookChapter = (id: string, signal?: AbortSignal) =>
-  get<{ id: string; content: string }>(`/api/handbook/${encodeURIComponent(id)}`, signal).then(
-    (r) => r.content,
+export const listHandbookChapters = (projectId?: string | null, signal?: AbortSignal) =>
+  get<{ chapters: HandbookChapter[] }>(`/api/handbook${handbookQuery(projectId)}`, signal).then(
+    (r) => r.chapters,
   );
 
-export const saveHandbookChapter = (id: string, content: string) =>
-  patch<{ saved: boolean }>(`/api/handbook/${encodeURIComponent(id)}`, { content });
+/** Resolves the chapter by its own scope; `projectId` disambiguates an id that
+ * exists in both scopes. */
+export const getHandbookChapter = (id: string, projectId?: string | null, signal?: AbortSignal) =>
+  get<{ chapter: HandbookChapter; content: string }>(
+    `/api/handbook/${encodeURIComponent(id)}${handbookQuery(projectId)}`,
+    signal,
+  ).then((r) => r.content);
+
+export const createHandbookChapter = (req: {
+  projectId?: string | null;
+  title: string;
+  content: string;
+}) =>
+  post<{ chapter: HandbookChapter }>(`/api/handbook${handbookQuery(req.projectId)}`, {
+    title: req.title,
+    content: req.content,
+  }).then((r) => r.chapter);
+
+export const saveHandbookChapter = (id: string, content: string, projectId?: string | null) =>
+  patch<{ saved: boolean }>(
+    `/api/handbook/${encodeURIComponent(id)}${handbookQuery(projectId)}`,
+    { content },
+  );
+
+export const deleteHandbookChapter = (id: string, projectId?: string | null) =>
+  writeResponse(`/api/handbook/${encodeURIComponent(id)}${handbookQuery(projectId)}`, {
+    method: "DELETE",
+  }).then((r) => json<{ ok: boolean }>(r));
 
 // --- chat attachments ------------------------------------------------------
 
