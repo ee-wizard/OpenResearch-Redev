@@ -1747,7 +1747,8 @@ export interface PromptGist {
   projectId: string | null;
   name: string;
   content: string;
-  description?: string;
+  /** Rust `Option<String>` serializes as `null` (no skip_serializing_if). */
+  description: string | null;
   tags: string[];
   createdAt: number;
   updatedAt: number;
@@ -1767,7 +1768,7 @@ export const createPromptGist = (body: {
   content: string;
   description?: string;
   tags?: string[];
-}) => post<PromptGist>("/api/prompt-gists", body);
+}) => post<{ gist: PromptGist }>("/api/prompt-gists", body).then((r) => r.gist);
 
 export const updatePromptGist = (
   id: string,
@@ -1779,7 +1780,7 @@ export const updatePromptGist = (
     tags?: string[];
   },
 ) =>
-  patch<PromptGist>(`/api/prompt-gists/${encodeURIComponent(id)}${promptGistQuery(body.projectId ?? undefined)}`, body);
+  patch<{ gist: PromptGist }>(`/api/prompt-gists/${encodeURIComponent(id)}${promptGistQuery(body.projectId ?? undefined)}`, body).then((r) => r.gist);
 
 export const deletePromptGist = (id: string, projectId?: string) =>
   writeResponse(`/api/prompt-gists/${encodeURIComponent(id)}${promptGistQuery(projectId)}`, {

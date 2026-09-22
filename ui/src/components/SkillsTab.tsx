@@ -453,9 +453,9 @@ function sourceBadge(source: string) {
     case "project":
       return <Badge size="small">{m.library_project()}</Badge>;
     case "user":
-      return <Badge size="small" variant="primary">User</Badge>;
+      return <Badge size="small" variant="primary">{m.library_source_user()}</Badge>;
     case "mirrored":
-      return <Badge size="small">Mirrored</Badge>;
+      return <Badge size="small">{m.library_source_mirrored()}</Badge>;
   }
 }
 
@@ -727,8 +727,8 @@ const SKILL_SOURCE_LABELS: Record<ChatAttachmentSource, string> = {
   builtin: m.library_built_in(),
   team: m.library_team(),
   supervisor: m.library_supervisor(),
-  user: "User/Uploaded",
-  mirrored: "Mirrored",
+  user: m.library_source_user(),
+  mirrored: m.library_source_mirrored(),
   project: m.library_project(),
 };
 
@@ -817,7 +817,7 @@ export function LibraryPicker({
                       type="button"
                       className="flex items-center gap-2 rounded-md px-2 py-1.5 text-start hover:bg-surface"
                       onClick={() => insert(`@${agent.id}`)}
-                      title={agent.installed ? `${agent.name} — installed` : `${agent.name} — not installed`}
+                      title={agent.installed ? m.library_agent_installed({ name: agent.name }) : m.library_agent_not_installed({ name: agent.name })}
                     >
                       <Bot size={14} />
                       <span className="text-sm text-text">{agent.name}</span>
