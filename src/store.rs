@@ -14,7 +14,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 
 use crate::error::{anyhow, Result};
-use crate::local::model::{LocalExperiment, LocalProject, TeamPaper};
+use crate::local::model::{LocalExperiment, LocalProject, PromptGist, TeamPaper};
 use crate::workspace_state::{GlobalWorkspaceState, WorkspaceState};
 
 pub fn data_dir() -> PathBuf {
@@ -595,6 +595,19 @@ impl Store {
             );
             CREATE INDEX IF NOT EXISTS idx_team_papers_project
                 ON team_papers(project_id, created_at);
+            CREATE TABLE IF NOT EXISTS prompt_gists (
+                id          TEXT PRIMARY KEY,
+                project_id  TEXT,
+                name        TEXT NOT NULL,
+                content     TEXT NOT NULL,
+                description TEXT,
+                tags        TEXT,
+                created_at  INTEGER NOT NULL,
+                updated_at  INTEGER NOT NULL,
+                FOREIGN KEY(project_id) REFERENCES local_projects(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_prompt_gists_project
+                ON prompt_gists(project_id);
             CREATE TABLE IF NOT EXISTS ui_state (
                 id                       INTEGER PRIMARY KEY CHECK (id = 1),
                 onboarding_completed     INTEGER NOT NULL DEFAULT 0,
@@ -1874,6 +1887,80 @@ impl Store {
         Ok(n > 0)
     }
 
+    // --- prompt gists -------------------------------------------------------
+
+    pub fn create_prompt_gist(&self, g: &PromptGist) -> Result<()> {
+        self.conn.execute(
+            &format!("INSERT INTO prompt_gists ({PROMPT_GIST_COLS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)"),
+            params![
+                g.id,
+                g.project_id,
+                g.name,
+                g.content,
+                g.description,
+                serde_json::to_string(&g.tags)?,
+                g.created_at,
+                g.updated_at,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_prompt_gist(&self, id: &str) -> Result<Option<PromptGist>> {
+        let g = self
+            .conn
+            .query_row(
+                &format!("SELECT {PROMPT_GIST_COLS} FROM prompt_gists WHERE id = ?1"),
+                params![id],
+                PromptGist::from_row,
+            )
+            .optional()?;
+        Ok(g)
+    }
+
+    pub fn list_prompt_gists(&self, project_id: Option<&str>) -> Result<Vec<PromptGist>> {
+        if let Some(pid) = project_id {
+            let mut stmt = self.conn.prepare(&format!(
+                "SELECT {PROMPT_GIST_COLS} FROM prompt_gists \
+                 WHERE project_id = ?1 OR project_id IS NULL \
+                 ORDER BY project_id NULLS LAST, updated_at DESC"
+            ))?;
+            let rows = stmt.query_map(params![pid], PromptGist::from_row)?;
+            Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+        } else {
+            let mut stmt = self.conn.prepare(&format!(
+                "SELECT {PROMPT_GIST_COLS} FROM prompt_gists ORDER BY updated_at DESC"
+            ))?;
+            let rows = stmt.query_map([], PromptGist::from_row)?;
+            Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+        }
+    }
+
+    pub fn update_prompt_gist(&self, g: &PromptGist) -> Result<bool> {
+        let n = self.conn.execute(
+            "UPDATE prompt_gists SET project_id = ?2, name = ?3, content = ?4, description = ?5,
+                    tags = ?6, updated_at = ?7
+             WHERE id = ?1",
+            params![
+                g.id,
+                g.project_id,
+                g.name,
+                g.content,
+                g.description,
+                serde_json::to_string(&g.tags)?,
+                now_ms(),
+            ],
+        )?;
+        Ok(n > 0)
+    }
+
+    pub fn delete_prompt_gist(&self, id: &str) -> Result<bool> {
+        let n = self
+            .conn
+            .execute("DELETE FROM prompt_gists WHERE id = ?1", params![id])?;
+        Ok(n > 0)
+    }
+
     // --- chat sessions / messages ------------------------------------------
 
     pub fn create_chat_session(&self, s: &StoredChatSession) -> Result<()> {
@@ -3146,6 +3233,9 @@ const EXPERIMENT_COLS: &str = "id, project_id, parent_experiment_id, slug, branc
 
 const TEAM_PAPER_COLS: &str = "id, project_id, filename, title, authors_json, tags_json, notes, \
                                source_url, page_count, extracted_at, created_at, updated_at";
+
+const PROMPT_GIST_COLS: &str =
+    "id, project_id, name, content, description, tags, created_at, updated_at";
 
 fn row_to_run(row: &rusqlite::Row<'_>) -> std::result::Result<StoredRun, rusqlite::Error> {
     Ok(StoredRun {
@@ -5289,6 +5379,93 @@ mod tests {
         store.delete_local_project("proj_1").unwrap();
         assert!(store.get_team_paper("tp_1").unwrap().is_none());
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn prompt_gist_fixture(id: &str, project_id: Option<&str>) -> PromptGist {
+        PromptGist {
+            id: id.into(),
+            project_id: project_id.map(|p| p.into()),
+            name: format!("gist-{id}"),
+            content: format!("content of {id}"),
+            description: Some("description".into()),
+            tags: vec!["tag".into()],
+            created_at: 1,
+            updated_at: 1,
+        }
+    }
+
+    #[test]
+    fn prompt_gists_support_global_and_project_scoped() {
+        let dir =
+            std::env::temp_dir().join(format!("orx-store-prompt-gist-{}", uuid::Uuid::new_v4()));
+        let store = Store::open_at(dir.clone()).unwrap();
+        store
+            .create_local_project(&LocalProject {
+                id: "proj_1".into(),
+                name: "Project".into(),
+                slug: "project".into(),
+                github_owner: String::new(),
+                github_repo: String::new(),
+                github_sync_enabled: false,
+                baseline_branch: "main".into(),
+                repo_path: dir.join("project").to_string_lossy().into_owned(),
+                project_dir: dir.join("project").to_string_lossy().into_owned(),
+                run_command: None,
+                paper_id: None,
+                created_at: 1,
+                updated_at: 1,
+            })
+            .unwrap();
+
+        store
+            .create_prompt_gist(&prompt_gist_fixture("g1", None))
+            .unwrap();
+        store
+            .create_prompt_gist(&prompt_gist_fixture("g2", Some("proj_1")))
+            .unwrap();
+        store
+            .create_prompt_gist(&prompt_gist_fixture("g3", Some("proj_1")))
+            .unwrap();
+
+        assert_eq!(store.list_prompt_gists(None).unwrap().len(), 3);
+        assert_eq!(store.list_prompt_gists(Some("proj_1")).unwrap().len(), 3);
+        assert_eq!(store.list_prompt_gists(Some("proj_2")).unwrap().len(), 1);
+
+        let g1 = store.get_prompt_gist("g1").unwrap().unwrap();
+        assert!(g1.project_id.is_none());
+        let g2 = store.get_prompt_gist("g2").unwrap().unwrap();
+        assert_eq!(g2.project_id.as_deref(), Some("proj_1"));
+
+        let mut updated = prompt_gist_fixture("g2", Some("proj_1"));
+        updated.name = "renamed".into();
+        updated.content = "new content".into();
+        updated.tags = vec!["new".into()];
+        assert!(store.update_prompt_gist(&updated).unwrap());
+        let stored = store.get_prompt_gist("g2").unwrap().unwrap();
+        assert_eq!(stored.name, "renamed");
+        assert_eq!(stored.content, "new content");
+        assert_eq!(stored.tags, vec!["new"]);
+        assert!(stored.updated_at > 1);
+
+        assert!(store.delete_prompt_gist("g1").unwrap());
+        assert!(store.get_prompt_gist("g1").unwrap().is_none());
+        assert_eq!(store.list_prompt_gists(None).unwrap().len(), 2);
+
+        store.delete_local_project("proj_1").unwrap();
+        assert_eq!(store.list_prompt_gists(None).unwrap().len(), 0);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn prompt_gist_update_returns_false_for_missing() {
+        let dir =
+            std::env::temp_dir().join(format!("orx-store-prompt-gist-{}", uuid::Uuid::new_v4()));
+        let store = Store::open_at(dir.clone()).unwrap();
+        assert!(!store
+            .update_prompt_gist(&prompt_gist_fixture("missing", None))
+            .unwrap());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

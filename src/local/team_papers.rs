@@ -68,8 +68,8 @@ pub fn save_team_paper(
     // Containment: the generated path must stay inside the team-papers tree.
     let canonical_base = canonicalize(&base_dir)
         .map_err(|e| anyhow!("Could not canonicalize team papers dir: {e}"))?;
-    let canonical_dir = canonicalize(&dir)
-        .map_err(|e| anyhow!("Could not canonicalize paper dir: {e}"))?;
+    let canonical_dir =
+        canonicalize(&dir).map_err(|e| anyhow!("Could not canonicalize paper dir: {e}"))?;
     if !canonical_dir.starts_with(&canonical_base) {
         return Err(anyhow!("paper directory escapes team papers directory"));
     }

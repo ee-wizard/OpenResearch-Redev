@@ -104,6 +104,7 @@ const CUSTOMIZE: &str = include_str!("../../agent-skills/orx-customize/SKILL.md"
 const PAPER: &str = include_str!("../../agent-skills/orx-paper/SKILL.md");
 const INSTANCES: &str = include_str!("../../agent-skills/orx-instances/SKILL.md");
 const TEAM_PAPERS: &str = include_str!("../../agent-skills/orx-team-papers/SKILL.md");
+const PROMPT_GISTS: &str = include_str!("../../agent-skills/orx-prompt-gists/SKILL.md");
 const FIGURES: &str = include_str!("../../agent-skills/orx-figures/SKILL.md");
 const FIGURES_RESOURCES: &[AgentSkillResource] = &[
     AgentSkillResource {
@@ -227,6 +228,12 @@ const S_TEAM_PAPERS: AgentSkill = AgentSkill {
     content: TEAM_PAPERS,
     resources: &[],
 };
+const S_PROMPT_GISTS: AgentSkill = AgentSkill {
+    name: "orx-prompt-gists",
+    description: "Insert saved prompt snippets (gists) into the current conversation. Use when the user asks to use, reference, or expand a named gist, or when a stored snippet is the right starting point for the task at hand.",
+    content: PROMPT_GISTS,
+    resources: &[],
+};
 
 /// The modules for a given set, in a stable order. Full adds `create`; every
 /// shared module uses the same canonical `SKILL.md`.
@@ -243,6 +250,7 @@ pub fn skills(set: SkillSet) -> Vec<&'static AgentSkill> {
             &S_FIGURES,
             &S_PAPER,
             &S_TEAM_PAPERS,
+            &S_PROMPT_GISTS,
             &S_CUSTOMIZE,
             &S_LIT,
         ],
@@ -258,6 +266,7 @@ pub fn skills(set: SkillSet) -> Vec<&'static AgentSkill> {
             &S_FIGURES,
             &S_PAPER,
             &S_TEAM_PAPERS,
+            &S_PROMPT_GISTS,
             &S_CUSTOMIZE,
             &S_LIT,
         ],

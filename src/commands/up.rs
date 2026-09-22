@@ -676,6 +676,16 @@ fn router(state: AppState, remote_auth: Option<RemoteAuth>) -> Router {
             "/api/projects/{id}/team-papers/{paperId}/text",
             get(get_team_paper_text),
         )
+        .route(
+            "/api/prompt-gists",
+            get(list_prompt_gists).post(create_prompt_gist),
+        )
+        .route(
+            "/api/prompt-gists/{id}",
+            get(get_prompt_gist)
+                .patch(update_prompt_gist)
+                .delete(delete_prompt_gist),
+        )
         .route("/api/projects/{id}/runs", get(list_project_runs))
         .route("/api/papers/search", get(search_papers_api))
         .route("/api/papers/resolve", get(resolve_paper_api))
@@ -2270,6 +2280,157 @@ async fn get_team_paper_text(Path((id, paper_id)): Path<(String, String)>) -> Ap
         .map_err(|e| ApiError::from(anyhow!("team paper text task failed: {e}")))?
         .map_err(bad_request)?;
     Ok(Json(json!({ "text": text })))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreatePromptGistReq {
+    project_id: Option<String>,
+    name: String,
+    content: String,
+    description: Option<String>,
+    tags: Option<Vec<String>>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdatePromptGistReq {
+    project_id: Option<Option<String>>,
+    name: Option<String>,
+    content: Option<String>,
+    #[serde(default, deserialize_with = "double_option")]
+    description: Option<Option<String>>,
+    tags: Option<Vec<String>>,
+}
+
+#[derive(Deserialize)]
+struct PromptGistsQuery {
+    project_id: Option<String>,
+}
+
+fn prompt_gist_json(gist: &local::model::PromptGist) -> Value {
+    serde_json::to_value(gist).unwrap_or_else(|_| json!({ "id": gist.id }))
+}
+
+fn validate_prompt_gist_project(store: &Store, project_id: Option<&str>) -> Result<(), ApiError> {
+    if let Some(pid) = project_id {
+        if store.get_local_project(pid)?.is_none() {
+            return Err(bad_request("project not found"));
+        }
+    }
+    Ok(())
+}
+
+async fn list_prompt_gists(Query(q): Query<PromptGistsQuery>) -> ApiResult {
+    let store = Store::open()?;
+    if let Some(pid) = &q.project_id {
+        store
+            .get_local_project(pid)?
+            .ok_or_else(|| not_found("project"))?;
+    }
+    let gists = store.list_prompt_gists(q.project_id.as_deref())?;
+    Ok(Json(json!({ "gists": gists })))
+}
+
+async fn create_prompt_gist(Json(req): Json<CreatePromptGistReq>) -> ApiResult {
+    let store = Store::open()?;
+    validate_prompt_gist_project(&store, req.project_id.as_deref())?;
+    let name = req.name.trim().to_string();
+    let content = req.content.trim().to_string();
+    if name.is_empty() {
+        return Err(bad_request("name cannot be empty"));
+    }
+    if content.is_empty() {
+        return Err(bad_request("content cannot be empty"));
+    }
+    let gist = local::model::PromptGist {
+        id: uuid::Uuid::new_v4().to_string(),
+        project_id: req.project_id.filter(|p| !p.trim().is_empty()),
+        name,
+        content,
+        description: req.description.filter(|d| !d.trim().is_empty()),
+        tags: req.tags.unwrap_or_default(),
+        created_at: now_ms(),
+        updated_at: now_ms(),
+    };
+    store.create_prompt_gist(&gist)?;
+    Ok(Json(json!({ "gist": prompt_gist_json(&gist) })))
+}
+
+async fn get_prompt_gist(Path(id): Path<String>, Query(q): Query<PromptGistsQuery>) -> ApiResult {
+    let store = Store::open()?;
+    let gist = store
+        .get_prompt_gist(&id)?
+        .ok_or_else(|| not_found("gist"))?;
+    if let Some(pid) = &q.project_id {
+        if gist.project_id.as_ref() != Some(pid) {
+            return Err(not_found("gist"));
+        }
+    }
+    Ok(Json(json!({ "gist": prompt_gist_json(&gist) })))
+}
+
+async fn update_prompt_gist(
+    Path(id): Path<String>,
+    Query(q): Query<PromptGistsQuery>,
+    Json(req): Json<UpdatePromptGistReq>,
+) -> ApiResult {
+    let store = Store::open()?;
+    let mut gist = store
+        .get_prompt_gist(&id)?
+        .ok_or_else(|| not_found("gist"))?;
+    if let Some(pid) = &q.project_id {
+        if gist.project_id.as_ref() != Some(pid) {
+            return Err(not_found("gist"));
+        }
+    }
+    if let Some(project_id) = req.project_id {
+        validate_prompt_gist_project(&store, project_id.as_deref())?;
+        gist.project_id = project_id.filter(|p| !p.trim().is_empty());
+    }
+    if let Some(name) = req.name {
+        let name = name.trim().to_string();
+        if name.is_empty() {
+            return Err(bad_request("name cannot be empty"));
+        }
+        gist.name = name;
+    }
+    if let Some(content) = req.content {
+        let content = content.trim().to_string();
+        if content.is_empty() {
+            return Err(bad_request("content cannot be empty"));
+        }
+        gist.content = content;
+    }
+    if let Some(description) = req.description {
+        gist.description = description.filter(|d| !d.trim().is_empty());
+    }
+    if let Some(tags) = req.tags {
+        gist.tags = tags;
+    }
+    if !store.update_prompt_gist(&gist)? {
+        return Err(not_found("gist"));
+    }
+    Ok(Json(json!({ "gist": prompt_gist_json(&gist) })))
+}
+
+async fn delete_prompt_gist(
+    Path(id): Path<String>,
+    Query(q): Query<PromptGistsQuery>,
+) -> ApiResult {
+    let store = Store::open()?;
+    let gist = store
+        .get_prompt_gist(&id)?
+        .ok_or_else(|| not_found("gist"))?;
+    if let Some(pid) = &q.project_id {
+        if gist.project_id.as_ref() != Some(pid) {
+            return Err(not_found("gist"));
+        }
+    }
+    if !store.delete_prompt_gist(&id)? {
+        return Err(not_found("gist"));
+    }
+    Ok(Json(json!({ "ok": true })))
 }
 
 async fn list_project_runs(Path(id): Path<String>) -> ApiResult {

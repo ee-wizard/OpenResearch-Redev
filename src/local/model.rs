@@ -161,3 +161,33 @@ impl TeamPaper {
             .unwrap_or(&self.filename)
     }
 }
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PromptGist {
+    pub id: String,
+    pub project_id: Option<String>,
+    pub name: String,
+    pub content: String,
+    pub description: Option<String>,
+    pub tags: Vec<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+impl PromptGist {
+    /// Column order must match `store::PROMPT_GIST_COLS`.
+    pub(crate) fn from_row(row: &rusqlite::Row<'_>) -> std::result::Result<Self, rusqlite::Error> {
+        let tags_json: String = row.get(5)?;
+        Ok(Self {
+            id: row.get(0)?,
+            project_id: row.get(1)?,
+            name: row.get(2)?,
+            content: row.get(3)?,
+            description: row.get(4)?,
+            tags: serde_json::from_str(&tags_json).unwrap_or_default(),
+            created_at: row.get(6)?,
+            updated_at: row.get(7)?,
+        })
+    }
+}
