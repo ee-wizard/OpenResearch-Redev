@@ -2,10 +2,11 @@ import { queryOptions, useMutation } from "@tanstack/react-query";
 import * as api from "../api";
 import { queryClient, workspaceKey } from "./client";
 
-export const listPromptGistsQuery = (projectId?: string) =>
+/** `projectId === null` (the default) addresses the global scope. */
+export const listPromptGistsQuery = (projectId: string | null = null) =>
   queryOptions({
-    queryKey: workspaceKey("listPromptGists", projectId ?? null),
-    queryFn: ({ signal }) => api.listPromptGists(projectId, signal),
+    queryKey: workspaceKey("listPromptGists", projectId),
+    queryFn: ({ signal }) => api.listPromptGists(projectId ?? undefined, signal),
     staleTime: 30_000,
   });
 

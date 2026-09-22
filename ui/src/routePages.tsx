@@ -3,6 +3,8 @@ import { isCancelledError, useQuery } from "@tanstack/react-query";
 import { listProjectsQuery, getUiStateQuery } from "./queries/projects";
 import { useRouteContext, Link, useNavigate, type ErrorComponentProps } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
+import type { LucideIcon } from "lucide-react";
+import { Blocks, Book, FileText, Lightbulb } from "lucide-react";
 
 import { useRuntime } from "./RemoteRuntime";
 
@@ -13,6 +15,10 @@ import { initialPanelWidth } from "./panelLayout";
 import { m } from "./paraglide/messages.js";
 import { Onboarding } from "./components/Onboarding";
 import { ProjectsHome } from "./components/ProjectsHome";
+import { LibraryTab } from "./components/SkillsTab";
+import { HandbookTab } from "./components/HandbookTab";
+import { PromptGistsTab } from "./components/PromptGistsTab";
+import { TeamPapersTab } from "./components/TeamPapersTab";
 import { OfflineBanner } from "./components/OfflineBanner";
 import { RemoteStatus } from "./components/RemoteStatus";
 import { UpdateBanner, useUpdateStatus } from "./components/UpdateBanner";
@@ -105,6 +111,7 @@ export function ProjectsPage() {
               remote={runtime.kind === "ssh"}
               projects={projects}
               onOpen={openProject}
+              onOpenTeamLibrary={() => void navigate({ to: "/team" })}
               onCreated={(project, publicationError) => {
                 if (publicationError) {
                   showAlert(publicationError, "error");
@@ -115,6 +122,77 @@ export function ProjectsPage() {
             />
           )}
       {runtime.kind === "ssh" && <RemoteStatus runtime={runtime} corner />}
+    </div>
+  );
+}
+
+const TEAM_SECTIONS = ["library", "handbook", "promptGists", "teamPapers"] as const;
+type TeamSection = (typeof TEAM_SECTIONS)[number];
+
+const TEAM_SECTION_ICONS: Record<TeamSection, LucideIcon> = {
+  library: Blocks,
+  handbook: Book,
+  promptGists: Lightbulb,
+  teamPapers: FileText,
+};
+
+// Held as functions so a locale switch relabels the nav on the next render.
+const TEAM_SECTION_LABELS: Record<TeamSection, () => string> = {
+  library: m.library_title,
+  handbook: m.handbook_title,
+  promptGists: m.prompt_gists_title,
+  teamPapers: m.team_papers_title,
+};
+
+/** Project-independent destination for the team-wide panels, so the Library,
+ * Handbook, Prompt Gists, and Team Papers stay reachable with zero projects. */
+export function TeamPage() {
+  const [section, setSection] = useState<TeamSection>("library");
+  useEffect(() => { document.title = m.team_shell_title(); }, []);
+  return (
+    <div className="app flex h-full flex-col bg-canvas">
+      <header className="flex shrink-0 flex-wrap items-baseline gap-x-3 gap-y-1 border-b border-border bg-background px-4 py-3">
+        <h1 className="m-0 text-xl font-semibold text-text">{m.team_shell_title()}</h1>
+        <p className="m-0 text-sm text-subtext">{m.team_shell_description()}</p>
+        <Link to="/projects" className="ms-auto text-sm text-primary hover:underline">
+          {m.app_projects()}
+        </Link>
+      </header>
+      <div className="flex flex-1 min-h-0">
+        <nav
+          aria-label={m.team_shell_title()}
+          className="flex w-56 shrink-0 flex-col gap-0.5 border-e border-border bg-background p-2"
+        >
+          {TEAM_SECTIONS.map((id) => {
+            const Icon = TEAM_SECTION_ICONS[id];
+            return (
+              <button
+                key={id}
+                type="button"
+                aria-current={section === id ? "page" : undefined}
+                className={`flex items-center gap-2.5 rounded-md px-2.5 py-[7px] text-start text-base text-text [&:hover:not(.active)]:bg-surface [&.active]:bg-panel [&.active]:font-medium ${section === id ? "active" : ""}`}
+                onClick={() => setSection(id)}
+              >
+                <Icon size={15} />
+                <span>{TEAM_SECTION_LABELS[id]()}</span>
+              </button>
+            );
+          })}
+        </nav>
+        <section className="flex min-w-0 min-h-0 flex-1 flex-col">
+          {section === "handbook" ? (
+            <HandbookTab />
+          ) : section === "library" ? (
+            <div className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable_both-edges]">
+              <LibraryTab />
+            </div>
+          ) : section === "promptGists" ? (
+            <PromptGistsTab />
+          ) : (
+            <TeamPapersTab />
+          )}
+        </section>
+      </div>
     </div>
   );
 }

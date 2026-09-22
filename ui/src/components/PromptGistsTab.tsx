@@ -43,7 +43,7 @@ function GistForm({
   onSaved,
 }: {
   initial?: { id: string; projectId: string | null } & GistFormState;
-  projectId: string;
+  projectId: string | null;
   onCancel: () => void;
   onSaved: () => void;
 }) {
@@ -78,7 +78,7 @@ function GistForm({
           ...fields,
         })
       : createMutation.mutateAsync({
-          projectId: form.projectScoped ? projectId : (null as string | null),
+          projectId: form.projectScoped ? projectId : null,
           ...fields,
         });
     promise.then(onSaved).catch((error: unknown) => {
@@ -109,7 +109,7 @@ function GistForm({
         value={form.tags}
         onChange={(e) => setForm((f) => ({ ...f, tags: e.target.value }))}
       />
-      {!initial && (
+      {!initial && projectId !== null && (
         <label className="flex items-center gap-2 text-sm text-text">
           <input
             type="checkbox"
@@ -132,7 +132,7 @@ function GistForm({
   );
 }
 
-export function PromptGistsTab({ projectId }: { projectId: string }) {
+export function PromptGistsTab({ projectId = null }: { projectId?: string | null }) {
   const gistsQuery = useQuery(listPromptGistsQuery(projectId));
   const gists = gistsQuery.data ?? [];
   const deleteMutation = useDeletePromptGist();

@@ -1,15 +1,31 @@
 //! Editable research/writing handbook.
 //!
-//! Chapters live as markdown files under `<data_dir>/handbook/` with an
-//! `index.json` that defines their order. The dashboard renders them as a
-//! chapter-based guide that teams can customize.
+//! Chapters live as markdown files with an `index.json` that defines their
+//! order. The team-wide guide lives under `<data_dir>/handbook/`; a project's
+//! own research notes live under `<project_dir>/.openresearch/handbook/` and
+//! are created lazily on first write. A project sees the global chapters plus
+//! its own.
 
-use std::path::PathBuf;
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
 use crate::error::{anyhow, Result};
+use crate::local::model::LocalProject;
 use crate::store;
+
+const HANDBOOK_DIR: &str = "handbook";
+/// A project's chapter tree, beside the rest of its orx-owned state.
+const PROJECT_HANDBOOK_DIR: &str = ".openresearch/handbook";
+
+/// Which tree a chapter lives in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ChapterScope {
+    Global,
+    Project,
+}
 
 /// One chapter as exposed to the UI.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -18,6 +34,9 @@ pub struct Chapter {
     pub id: String,
     pub title: String,
     pub file_path: PathBuf,
+    pub scope: ChapterScope,
+    /// Owning project for a project chapter; null for a global one.
+    pub project_id: Option<String>,
 }
 
 /// On-disk chapter metadata entry.
@@ -29,18 +48,73 @@ struct ChapterIndexEntry {
     file: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ChapterIndex {
     chapters: Vec<ChapterIndexEntry>,
 }
 
-/// `<data_dir>/handbook`
-pub fn handbook_dir() -> PathBuf {
-    store::data_dir().join("handbook")
+/// A resolved chapter tree: where its files live plus the scope tags its
+/// chapters carry. Passing this in (rather than reaching for `data_dir()`
+/// inside) keeps the global tree testable and makes the project tree explicit.
+#[derive(Clone, Debug)]
+pub struct ChapterTree {
+    pub dir: PathBuf,
+    scope: ChapterScope,
+    project_id: Option<String>,
 }
 
-/// Idempotently seed the default handbook chapters.
+impl ChapterTree {
+    /// The team-wide tree under `<data_dir>/handbook`.
+    pub fn global(data_dir: &Path) -> Self {
+        Self {
+            dir: data_dir.join(HANDBOOK_DIR),
+            scope: ChapterScope::Global,
+            project_id: None,
+        }
+    }
+
+    /// A project's own tree under `<project_dir>/.openresearch/handbook`.
+    pub fn project(project: &LocalProject) -> Self {
+        Self {
+            dir: project_handbook_dir(project),
+            scope: ChapterScope::Project,
+            project_id: Some(project.id.clone()),
+        }
+    }
+
+    fn tag(&self, id: String, title: String, file_path: PathBuf) -> Chapter {
+        Chapter {
+            id,
+            title,
+            file_path,
+            scope: self.scope,
+            project_id: self.project_id.clone(),
+        }
+    }
+}
+
+/// `<data_dir>/handbook`
+pub fn handbook_dir() -> PathBuf {
+    store::data_dir().join(HANDBOOK_DIR)
+}
+
+/// `<project_dir>/.openresearch/handbook`
+pub fn project_handbook_dir(project: &LocalProject) -> PathBuf {
+    Path::new(&project.project_dir).join(PROJECT_HANDBOOK_DIR)
+}
+
+/// A chapter id names one markdown file and arrives from a URL path segment, so
+/// it must be a single directory-safe name: no separators, drive colons, NUL,
+/// or `.`/`..`. Mirrors `library::validate_item_id`.
+fn validate_chapter_id(id: &str) -> Result<()> {
+    if id.is_empty() || id == "." || id == ".." || id.contains(['/', '\\', ':', '\0']) {
+        return Err(anyhow!("Invalid handbook chapter id: {id}"));
+    }
+    Ok(())
+}
+
+/// Idempotently seed the default global handbook chapters.
 pub fn ensure_handbook() -> Result<()> {
     let dir = handbook_dir();
     std::fs::create_dir_all(&dir)?;
@@ -72,22 +146,14 @@ pub fn ensure_handbook() -> Result<()> {
     Ok(())
 }
 
-/// Return the ordered list of chapters from `index.json`, falling back to
-/// scanning the directory if the index is missing.
-pub fn list_chapters() -> Result<Vec<Chapter>> {
-    ensure_handbook()?;
-    let dir = handbook_dir();
-    let index_path = dir.join("index.json");
-
-    let entries: Vec<ChapterIndexEntry> = if index_path.exists() {
-        let text = std::fs::read_to_string(&index_path)?;
-        serde_json::from_str(&text).unwrap_or_default()
-    } else {
-        Vec::new()
-    };
+/// Ordered chapters of one tree. Falls back to scanning the directory when the
+/// index is missing or empty; a tree that does not exist yet (a project with no
+/// notes) is simply empty.
+pub fn list_chapters(tree: &ChapterTree) -> Result<Vec<Chapter>> {
+    let dir = &tree.dir;
 
     let mut chapters = Vec::new();
-    for entry in entries {
+    for entry in read_index(tree)?.chapters {
         let path = dir.join(&entry.file);
         let title = if path.exists() {
             std::fs::read_to_string(&path)
@@ -97,16 +163,12 @@ pub fn list_chapters() -> Result<Vec<Chapter>> {
         } else {
             entry.title
         };
-        chapters.push(Chapter {
-            id: entry.id,
-            title,
-            file_path: path,
-        });
+        chapters.push(tree.tag(entry.id, title, path));
     }
 
-    if chapters.is_empty() {
+    if chapters.is_empty() && dir.exists() {
         // Fallback: scan markdown files when no index exists yet.
-        for entry in std::fs::read_dir(&dir)? {
+        for entry in std::fs::read_dir(dir)? {
             let entry = entry?;
             let path = entry.path();
             if path.extension().and_then(|s| s.to_str()) != Some("md") {
@@ -121,11 +183,7 @@ pub fn list_chapters() -> Result<Vec<Chapter>> {
                 .ok()
                 .and_then(|content| parse_title_from_frontmatter(&content))
                 .unwrap_or_else(|| id.clone());
-            chapters.push(Chapter {
-                id,
-                title,
-                file_path: path,
-            });
+            chapters.push(tree.tag(id, title, path));
         }
         chapters.sort_by(|a, b| a.file_path.cmp(&b.file_path));
     }
@@ -133,10 +191,44 @@ pub fn list_chapters() -> Result<Vec<Chapter>> {
     Ok(chapters)
 }
 
-/// Read the markdown content of a chapter by id.
-pub fn get_chapter(id: &str) -> Result<String> {
-    ensure_handbook()?;
-    let chapter = find_chapter(id)?;
+/// Global chapters plus a project's own when one is in scope. Global first, so
+/// the team guide stays a stable prefix.
+pub fn list_chapters_for(data_dir: &Path, project: Option<&LocalProject>) -> Result<Vec<Chapter>> {
+    let mut chapters = list_chapters(&ChapterTree::global(data_dir))?;
+    if let Some(project) = project {
+        chapters.extend(list_chapters(&ChapterTree::project(project))?);
+    }
+    Ok(chapters)
+}
+
+/// Look up one chapter in a tree; `None` when that tree has no such id.
+pub fn find_chapter(tree: &ChapterTree, id: &str) -> Result<Option<Chapter>> {
+    validate_chapter_id(id)?;
+    Ok(list_chapters(tree)?.into_iter().find(|c| c.id == id))
+}
+
+/// Resolve which tree an id belongs to for a project-scoped route: the
+/// project's own chapter wins, then the global one. `None` when neither has it,
+/// so an id only a project knows stays invisible without that project.
+pub fn resolve_tree(
+    data_dir: &Path,
+    project: Option<&LocalProject>,
+    id: &str,
+) -> Result<Option<ChapterTree>> {
+    validate_chapter_id(id)?;
+    if let Some(project) = project {
+        let tree = ChapterTree::project(project);
+        if find_chapter(&tree, id)?.is_some() {
+            return Ok(Some(tree));
+        }
+    }
+    let tree = ChapterTree::global(data_dir);
+    Ok(find_chapter(&tree, id)?.is_some().then_some(tree))
+}
+
+/// Read the markdown content of a chapter.
+pub fn get_chapter(tree: &ChapterTree, id: &str) -> Result<String> {
+    let chapter = find_chapter(tree, id)?.ok_or_else(|| anyhow!("Chapter {id} not found"))?;
     std::fs::read_to_string(&chapter.file_path).map_err(|e| {
         anyhow!(
             "Could not read chapter {}: {}",
@@ -146,38 +238,180 @@ pub fn get_chapter(id: &str) -> Result<String> {
     })
 }
 
-/// Write new markdown content for a chapter and update its title in
-/// `index.json` when a frontmatter title is present.
-pub fn save_chapter(id: &str, content: &str) -> Result<()> {
-    ensure_handbook()?;
-    let chapter = find_chapter(id)?;
-    std::fs::write(&chapter.file_path, content)?;
+/// Create a chapter in `tree`. The id is a slug of the title, made unique
+/// within that tree, so a project chapter may share a global id.
+pub fn create_chapter(tree: &ChapterTree, title: &str, content: &str) -> Result<Chapter> {
+    let title = title.trim();
+    if title.is_empty() {
+        return Err(anyhow!("title is required"));
+    }
+    std::fs::create_dir_all(&tree.dir)
+        .map_err(|e| anyhow!("Could not create {}: {}", tree.dir.display(), e))?;
 
-    if let Some(new_title) = parse_title_from_frontmatter(content) {
-        let dir = handbook_dir();
-        let index_path = dir.join("index.json");
-        if index_path.exists() {
-            let text = std::fs::read_to_string(&index_path)?;
-            if let Ok(mut index) = serde_json::from_str::<ChapterIndex>(&text) {
-                for entry in &mut index.chapters {
-                    if entry.id == id {
-                        entry.title = new_title;
-                        break;
-                    }
-                }
-                std::fs::write(&index_path, serde_json::to_string_pretty(&index)?)?;
+    let existing: HashSet<String> = list_chapters(tree)?.into_iter().map(|c| c.id).collect();
+    let id = unique_slug(title, &existing);
+    let file = format!("{id}.md");
+    let path = tree.dir.join(&file);
+    std::fs::write(&path, set_frontmatter_title(content, title))
+        .map_err(|e| anyhow!("Could not write {}: {}", path.display(), e))?;
+
+    let mut index = read_index(tree)?;
+    index.chapters.push(ChapterIndexEntry {
+        id: id.clone(),
+        title: title.to_string(),
+        file,
+    });
+    write_index(tree, &index)?;
+    Ok(tree.tag(id, title.to_string(), path))
+}
+
+/// Write new markdown for a chapter, optionally retitling it. When `title` is
+/// given the stored frontmatter carries it; otherwise the frontmatter already
+/// in `content` is kept. The index title follows the stored frontmatter.
+pub fn save_chapter(
+    tree: &ChapterTree,
+    id: &str,
+    title: Option<&str>,
+    content: &str,
+) -> Result<()> {
+    let chapter = find_chapter(tree, id)?.ok_or_else(|| anyhow!("Chapter {id} not found"))?;
+    let body = match title.map(str::trim).filter(|t| !t.is_empty()) {
+        Some(title) => set_frontmatter_title(content, title),
+        None => content.to_string(),
+    };
+    std::fs::write(&chapter.file_path, &body)
+        .map_err(|e| anyhow!("Could not write {}: {}", chapter.file_path.display(), e))?;
+
+    if let Some(new_title) = parse_title_from_frontmatter(&body) {
+        let mut index = read_index(tree)?;
+        let mut matched = false;
+        for entry in &mut index.chapters {
+            if entry.id == id {
+                entry.title = new_title.clone();
+                matched = true;
+                break;
             }
+        }
+        if matched {
+            write_index(tree, &index)?;
         }
     }
 
     Ok(())
 }
 
-fn find_chapter(id: &str) -> Result<Chapter> {
-    list_chapters()?
-        .into_iter()
-        .find(|c| c.id == id)
-        .ok_or_else(|| anyhow!("Chapter {id} not found"))
+/// Delete a chapter and drop its `index.json` entry. The file goes first so a
+/// partial failure leaves the entry rather than a dangling one. Returns `false`
+/// when the tree has no such chapter.
+pub fn delete_chapter(tree: &ChapterTree, id: &str) -> Result<bool> {
+    let Some(chapter) = find_chapter(tree, id)? else {
+        return Ok(false);
+    };
+    if chapter.file_path.exists() {
+        std::fs::remove_file(&chapter.file_path)
+            .map_err(|e| anyhow!("Could not remove {}: {}", chapter.file_path.display(), e))?;
+    }
+    let mut index = read_index(tree)?;
+    let before = index.chapters.len();
+    index.chapters.retain(|entry| entry.id != id);
+    if index.chapters.len() != before {
+        write_index(tree, &index)?;
+    }
+    Ok(true)
+}
+
+/// Remove a project's own handbook tree. Called when the project is deleted;
+/// global chapters live under the data dir and are never touched.
+pub fn remove_project_handbook_dir(project: &LocalProject) -> Result<()> {
+    let dir = project_handbook_dir(project);
+    if dir.exists() {
+        std::fs::remove_dir_all(&dir)
+            .map_err(|e| anyhow!("Could not remove {}: {}", dir.display(), e))?;
+    }
+    Ok(())
+}
+
+fn read_index(tree: &ChapterTree) -> Result<ChapterIndex> {
+    let path = tree.dir.join("index.json");
+    if !path.exists() {
+        return Ok(ChapterIndex::default());
+    }
+    let text = std::fs::read_to_string(&path)?;
+    Ok(serde_json::from_str(&text).unwrap_or_default())
+}
+
+fn write_index(tree: &ChapterTree, index: &ChapterIndex) -> Result<()> {
+    std::fs::create_dir_all(&tree.dir)?;
+    let path = tree.dir.join("index.json");
+    std::fs::write(&path, serde_json::to_string_pretty(index)?)
+        .map_err(|e| anyhow!("Could not write {}: {}", path.display(), e))
+}
+
+/// Slugify a title into a chapter id: lowercase ASCII alphanumerics, every
+/// other run collapsed to `-`. A title with no ASCII alphanumerics (CJK-only,
+/// say) falls back to `chapter`.
+fn slugify(title: &str) -> String {
+    let mut out = String::new();
+    let mut pending_dash = false;
+    for ch in title.chars() {
+        if ch.is_ascii_alphanumeric() {
+            if pending_dash && !out.is_empty() {
+                out.push('-');
+            }
+            pending_dash = false;
+            out.push(ch.to_ascii_lowercase());
+        } else {
+            pending_dash = true;
+        }
+    }
+    if out.is_empty() {
+        "chapter".to_string()
+    } else {
+        out
+    }
+}
+
+/// A slug id unique within `existing`, appending `-2`, `-3`, … on collision.
+fn unique_slug(title: &str, existing: &HashSet<String>) -> String {
+    let base = slugify(title);
+    if !existing.contains(&base) {
+        return base;
+    }
+    let mut n = 2;
+    loop {
+        let candidate = format!("{base}-{n}");
+        if !existing.contains(&candidate) {
+            return candidate;
+        }
+        n += 1;
+    }
+}
+
+/// Ensure `content`'s frontmatter carries `title`, replacing an existing title
+/// line or wrapping the body when there is no frontmatter block.
+fn set_frontmatter_title(content: &str, title: &str) -> String {
+    let line = format!("title: {title}");
+    if let Some(rest) = content.strip_prefix("---\n") {
+        if let Some(end) = rest.find("\n---") {
+            let block = &rest[..end];
+            let after = &rest[end..];
+            let mut lines: Vec<String> = Vec::new();
+            let mut replaced = false;
+            for existing in block.lines() {
+                if existing.trim_start().starts_with("title:") {
+                    lines.push(line.clone());
+                    replaced = true;
+                } else {
+                    lines.push(existing.to_string());
+                }
+            }
+            if !replaced {
+                lines.insert(0, line);
+            }
+            return format!("---\n{}{}", lines.join("\n"), after);
+        }
+    }
+    format!("---\n{line}\n---\n\n{content}")
 }
 
 fn parse_title_from_frontmatter(content: &str) -> Option<String> {
@@ -525,4 +759,159 @@ LEAD 通常与数据库或数据挖掘领域相关，可能涉及：
 "#,
         ),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn project_fixture(dir: &Path) -> LocalProject {
+        LocalProject {
+            id: "proj-1".to_string(),
+            name: "Demo".to_string(),
+            slug: "demo".to_string(),
+            github_owner: String::new(),
+            github_repo: String::new(),
+            github_sync_enabled: false,
+            baseline_branch: "main".to_string(),
+            repo_path: dir.join("repo").to_string_lossy().into_owned(),
+            project_dir: dir.to_string_lossy().into_owned(),
+            run_command: None,
+            paper_id: None,
+            created_at: 1,
+            updated_at: 1,
+        }
+    }
+
+    fn temp_dir() -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("orx-handbook-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn global_chapter_round_trip() {
+        let dir = temp_dir();
+        let tree = ChapterTree::global(&dir);
+
+        let chapter = create_chapter(&tree, "Vector Databases", "# Notes\n").unwrap();
+        assert_eq!(chapter.id, "vector-databases");
+        assert_eq!(chapter.scope, ChapterScope::Global);
+        assert_eq!(chapter.project_id, None);
+
+        let listed = list_chapters(&tree).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, "vector-databases");
+        assert_eq!(listed[0].title, "Vector Databases");
+
+        let content = get_chapter(&tree, "vector-databases").unwrap();
+        assert!(content.contains("title: Vector Databases"), "{content}");
+        assert!(content.contains("# Notes"), "{content}");
+
+        save_chapter(&tree, "vector-databases", Some("Vector DBs"), "intro\n").unwrap();
+        let chapter = find_chapter(&tree, "vector-databases").unwrap().unwrap();
+        assert_eq!(chapter.title, "Vector DBs");
+        assert!(get_chapter(&tree, "vector-databases")
+            .unwrap()
+            .contains("title: Vector DBs"));
+
+        assert!(delete_chapter(&tree, "vector-databases").unwrap());
+        assert!(find_chapter(&tree, "vector-databases").unwrap().is_none());
+        assert!(!dir.join("handbook").join("vector-databases.md").exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A project sees the global chapters plus its own, and an id that exists in
+    /// both scopes resolves to the right body.
+    #[test]
+    fn same_id_resolves_per_scope() {
+        let dir = temp_dir();
+        let project = project_fixture(&dir);
+        let global = ChapterTree::global(&dir);
+        let scoped = ChapterTree::project(&project);
+
+        create_chapter(&global, "Vector Databases", "global body\n").unwrap();
+        create_chapter(&scoped, "Vector Databases", "project body\n").unwrap();
+        // Uniqueness is per scope, so both keep the slug id.
+        assert!(find_chapter(&global, "vector-databases").unwrap().is_some());
+        assert!(find_chapter(&scoped, "vector-databases").unwrap().is_some());
+
+        let all = list_chapters_for(&dir, Some(&project)).unwrap();
+        assert_eq!(all.len(), 2);
+        assert_eq!(all[0].scope, ChapterScope::Global);
+        assert_eq!(all[0].project_id, None);
+        assert_eq!(all[1].scope, ChapterScope::Project);
+        assert_eq!(all[1].project_id.as_deref(), Some("proj-1"));
+
+        let resolved = resolve_tree(&dir, None, "vector-databases")
+            .unwrap()
+            .unwrap();
+        assert!(get_chapter(&resolved, "vector-databases")
+            .unwrap()
+            .contains("global body"));
+        let resolved = resolve_tree(&dir, Some(&project), "vector-databases")
+            .unwrap()
+            .unwrap();
+        assert!(get_chapter(&resolved, "vector-databases")
+            .unwrap()
+            .contains("project body"));
+
+        // A project-only chapter is invisible without that project.
+        create_chapter(&scoped, "Only Project", "p\n").unwrap();
+        assert!(resolve_tree(&dir, None, "only-project").unwrap().is_none());
+        assert!(resolve_tree(&dir, Some(&project), "only-project")
+            .unwrap()
+            .is_some());
+        assert!(find_chapter(&global, "only-project").unwrap().is_none());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn create_chapter_makes_unique_slugs() {
+        let dir = temp_dir();
+        let tree = ChapterTree::global(&dir);
+        create_chapter(&tree, "Caching!", "a\n").unwrap();
+        let second = create_chapter(&tree, "Caching?", "b\n").unwrap();
+        assert_eq!(second.id, "caching-2");
+        // A title with no ASCII alphanumerics falls back to a usable id.
+        let third = create_chapter(&tree, "向量数据库", "c\n").unwrap();
+        assert_eq!(third.id, "chapter");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Ids arrive from a URL path segment, so a separator or `..` must never
+    /// turn into a path.
+    #[test]
+    fn invalid_chapter_ids_are_rejected() {
+        let dir = temp_dir();
+        let project = project_fixture(&dir);
+        let tree = ChapterTree::global(&dir);
+        for id in ["..", ".", "", "a/b", "a\\b", "a:b", "../etc"] {
+            assert!(find_chapter(&tree, id).is_err(), "{id}");
+            assert!(resolve_tree(&dir, Some(&project), id).is_err(), "{id}");
+            assert!(delete_chapter(&tree, id).is_err(), "{id}");
+            assert!(save_chapter(&tree, id, None, "x").is_err(), "{id}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn removing_a_project_tree_leaves_globals() {
+        let dir = temp_dir();
+        let project = project_fixture(&dir);
+        let global = ChapterTree::global(&dir);
+        let scoped = ChapterTree::project(&project);
+        create_chapter(&global, "Global Guide", "g\n").unwrap();
+        create_chapter(&scoped, "Project Notes", "p\n").unwrap();
+        assert!(project_handbook_dir(&project).exists());
+
+        remove_project_handbook_dir(&project).unwrap();
+        assert!(!project_handbook_dir(&project).exists());
+        assert_eq!(list_chapters(&global).unwrap().len(), 1);
+        assert!(global.dir.join("global-guide.md").exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

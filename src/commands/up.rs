@@ -913,10 +913,12 @@ fn router(state: AppState, remote_auth: Option<RemoteAuth>) -> Router {
                 .patch(update_library_item)
                 .delete(delete_library_item),
         )
-        .route("/api/handbook", get(list_handbook))
+        .route("/api/handbook", get(list_handbook).post(create_handbook))
         .route(
             "/api/handbook/{id}",
-            get(get_handbook).patch(update_handbook),
+            get(get_handbook)
+                .patch(update_handbook)
+                .delete(delete_handbook),
         )
         .route("/api/chat/attachments", get(list_chat_attachments))
         .route(
@@ -1541,33 +1543,147 @@ async fn delete_library_item(
 #[serde(rename_all = "camelCase")]
 struct UpdateHandbookReq {
     content: String,
+    /// Optional retitle; the stored frontmatter carries it when present.
+    title: Option<String>,
 }
 
-async fn list_handbook() -> ApiResult {
-    let chapters = tokio::task::spawn_blocking(crate::local::handbook::list_chapters)
-        .await
-        .map_err(|e| ApiError::from(anyhow!("handbook task failed: {e}")))?
-        .map_err(bad_request)?;
-    Ok(Json(json!({ "chapters": chapters })))
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateHandbookReq {
+    title: String,
+    content: String,
 }
 
-async fn get_handbook(Path(id): Path<String>) -> ApiResult {
-    let content = tokio::task::spawn_blocking({
-        let id = id.clone();
-        move || crate::local::handbook::get_chapter(&id)
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HandbookQuery {
+    project_id: Option<String>,
+}
+
+/// Resolve the `?projectId=` scope guard: `None` is the global handbook, and a
+/// non-empty id must name a real project.
+fn handbook_project(
+    store: &Store,
+    project_id: Option<&str>,
+) -> std::result::Result<Option<local::model::LocalProject>, ApiError> {
+    match project_id.filter(|p| !p.trim().is_empty()) {
+        Some(pid) => store
+            .get_local_project(pid)?
+            .map(Some)
+            .ok_or_else(|| not_found("project")),
+        None => Ok(None),
+    }
+}
+
+async fn list_handbook(Query(q): Query<HandbookQuery>) -> ApiResult {
+    let store = Store::open()?;
+    let project = handbook_project(&store, q.project_id.as_deref())?;
+    let data_dir = store.data_dir().to_path_buf();
+    let chapters = tokio::task::spawn_blocking(move || {
+        crate::local::handbook::ensure_handbook()?;
+        crate::local::handbook::list_chapters_for(&data_dir, project.as_ref())
     })
     .await
     .map_err(|e| ApiError::from(anyhow!("handbook task failed: {e}")))?
     .map_err(bad_request)?;
-    Ok(Json(json!({ "id": id, "content": content })))
+    Ok(Json(json!({ "chapters": chapters })))
 }
 
-async fn update_handbook(Path(id): Path<String>, Json(req): Json<UpdateHandbookReq>) -> ApiResult {
-    tokio::task::spawn_blocking(move || crate::local::handbook::save_chapter(&id, &req.content))
-        .await
-        .map_err(|e| ApiError::from(anyhow!("handbook task failed: {e}")))?
-        .map_err(bad_request)?;
+async fn create_handbook(
+    Query(q): Query<HandbookQuery>,
+    Json(req): Json<CreateHandbookReq>,
+) -> ApiResult {
+    let store = Store::open()?;
+    let project = handbook_project(&store, q.project_id.as_deref())?;
+    let data_dir = store.data_dir().to_path_buf();
+    let chapter = tokio::task::spawn_blocking(move || {
+        crate::local::handbook::ensure_handbook()?;
+        let tree = match project.as_ref() {
+            Some(project) => crate::local::handbook::ChapterTree::project(project),
+            None => crate::local::handbook::ChapterTree::global(&data_dir),
+        };
+        crate::local::handbook::create_chapter(&tree, &req.title, &req.content)
+    })
+    .await
+    .map_err(|e| ApiError::from(anyhow!("handbook task failed: {e}")))?
+    .map_err(bad_request)?;
+    Ok(Json(json!({ "chapter": chapter })))
+}
+
+async fn get_handbook(Path(id): Path<String>, Query(q): Query<HandbookQuery>) -> ApiResult {
+    let store = Store::open()?;
+    let project = handbook_project(&store, q.project_id.as_deref())?;
+    let data_dir = store.data_dir().to_path_buf();
+    let found = tokio::task::spawn_blocking(
+        move || -> crate::error::Result<Option<(crate::local::handbook::Chapter, String)>> {
+            let Some(tree) =
+                crate::local::handbook::resolve_tree(&data_dir, project.as_ref(), &id)?
+            else {
+                return Ok(None);
+            };
+            let chapter = crate::local::handbook::find_chapter(&tree, &id)?
+                .ok_or_else(|| anyhow!("Chapter {id} not found"))?;
+            let content = crate::local::handbook::get_chapter(&tree, &id)?;
+            Ok(Some((chapter, content)))
+        },
+    )
+    .await
+    .map_err(|e| ApiError::from(anyhow!("handbook task failed: {e}")))?
+    .map_err(bad_request)?;
+    let Some((chapter, content)) = found else {
+        return Err(not_found("chapter"));
+    };
+    Ok(Json(json!({
+        "chapter": chapter,
+        // Kept alongside `chapter` for the pre-scope clients that read `id`.
+        "id": chapter.id,
+        "content": content,
+    })))
+}
+
+async fn update_handbook(
+    Path(id): Path<String>,
+    Query(q): Query<HandbookQuery>,
+    Json(req): Json<UpdateHandbookReq>,
+) -> ApiResult {
+    let store = Store::open()?;
+    let project = handbook_project(&store, q.project_id.as_deref())?;
+    let data_dir = store.data_dir().to_path_buf();
+    let saved = tokio::task::spawn_blocking(move || -> crate::error::Result<bool> {
+        let Some(tree) = crate::local::handbook::resolve_tree(&data_dir, project.as_ref(), &id)?
+        else {
+            return Ok(false);
+        };
+        crate::local::handbook::save_chapter(&tree, &id, req.title.as_deref(), &req.content)?;
+        Ok(true)
+    })
+    .await
+    .map_err(|e| ApiError::from(anyhow!("handbook task failed: {e}")))?
+    .map_err(bad_request)?;
+    if !saved {
+        return Err(not_found("chapter"));
+    }
     Ok(Json(json!({ "saved": true })))
+}
+
+async fn delete_handbook(Path(id): Path<String>, Query(q): Query<HandbookQuery>) -> ApiResult {
+    let store = Store::open()?;
+    let project = handbook_project(&store, q.project_id.as_deref())?;
+    let data_dir = store.data_dir().to_path_buf();
+    let deleted = tokio::task::spawn_blocking(move || -> crate::error::Result<bool> {
+        let Some(tree) = crate::local::handbook::resolve_tree(&data_dir, project.as_ref(), &id)?
+        else {
+            return Ok(false);
+        };
+        crate::local::handbook::delete_chapter(&tree, &id)
+    })
+    .await
+    .map_err(|e| ApiError::from(anyhow!("handbook task failed: {e}")))?
+    .map_err(bad_request)?;
+    if !deleted {
+        return Err(not_found("chapter"));
+    }
+    Ok(Json(json!({ "ok": true })))
 }
 
 /// Unified catalog for the chat composer picker: every insertable skill
@@ -2374,6 +2490,11 @@ async fn delete_project(State(state): State<AppState>, Path(id): Path<String>) -
     // directory holds no unreferenced orx data.
     if let Err(err) = team_papers::remove_team_papers_dir(&project) {
         eprintln!("orx up: could not remove team papers for project {id}: {err}");
+    }
+    // Project-scoped handbook chapters go the same way; global ones live under
+    // the data dir and are left alone.
+    if let Err(err) = local::handbook::remove_project_handbook_dir(&project) {
+        eprintln!("orx up: could not remove handbook chapters for project {id}: {err}");
     }
     Ok(Json(json!({ "ok": true })))
 }

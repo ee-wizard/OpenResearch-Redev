@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as ProjectsRouteImport } from './routes/projects'
 import { Route as RemoteLaunchRouteImport } from './routes/remote-launch'
+import { Route as TeamRouteImport } from './routes/team'
 import { Route as ProjectsIndexRouteImport } from './routes/projects.index'
 import { Route as ProjectsProjectIdRouteImport } from './routes/projects.$projectId'
 import { Route as ProjectsProjectIdIndexRouteImport } from './routes/projects.$projectId.index'
@@ -33,6 +34,11 @@ const ProjectsRoute = ProjectsRouteImport.update({
 const RemoteLaunchRoute = RemoteLaunchRouteImport.update({
   id: '/remote-launch',
   path: '/remote-launch',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const TeamRoute = TeamRouteImport.update({
+  id: '/team',
+  path: '/team',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ProjectsIndexRoute = ProjectsIndexRouteImport.update({
@@ -78,6 +84,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/projects': typeof ProjectsRouteWithChildren
   '/remote-launch': typeof RemoteLaunchRoute
+  '/team': typeof TeamRoute
   '/projects/$projectId': typeof ProjectsProjectIdRouteWithChildren
   '/projects/': typeof ProjectsIndexRoute
   '/projects/$projectId/skills': typeof ProjectsProjectIdSkillsRoute
@@ -89,6 +96,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/remote-launch': typeof RemoteLaunchRoute
+  '/team': typeof TeamRoute
   '/projects': typeof ProjectsIndexRoute
   '/projects/$projectId/skills': typeof ProjectsProjectIdSkillsRoute
   '/projects/$projectId': typeof ProjectsProjectIdIndexRoute
@@ -101,6 +109,7 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/projects': typeof ProjectsRouteWithChildren
   '/remote-launch': typeof RemoteLaunchRoute
+  '/team': typeof TeamRoute
   '/projects/$projectId': typeof ProjectsProjectIdRouteWithChildren
   '/projects/': typeof ProjectsIndexRoute
   '/projects/$projectId/skills': typeof ProjectsProjectIdSkillsRoute
@@ -115,6 +124,7 @@ export interface FileRouteTypes {
     | '/'
     | '/projects'
     | '/remote-launch'
+    | '/team'
     | '/projects/$projectId'
     | '/projects/'
     | '/projects/$projectId/skills'
@@ -126,6 +136,7 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/remote-launch'
+    | '/team'
     | '/projects'
     | '/projects/$projectId/skills'
     | '/projects/$projectId'
@@ -137,6 +148,7 @@ export interface FileRouteTypes {
     | '/'
     | '/projects'
     | '/remote-launch'
+    | '/team'
     | '/projects/$projectId'
     | '/projects/'
     | '/projects/$projectId/skills'
@@ -150,6 +162,7 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   ProjectsRoute: typeof ProjectsRouteWithChildren
   RemoteLaunchRoute: typeof RemoteLaunchRoute
+  TeamRoute: typeof TeamRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -173,6 +186,13 @@ declare module '@tanstack/react-router' {
       path: '/remote-launch'
       fullPath: '/remote-launch'
       preLoaderRoute: typeof RemoteLaunchRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/team': {
+      id: '/team'
+      path: '/team'
+      fullPath: '/team'
+      preLoaderRoute: typeof TeamRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/projects/': {
@@ -264,6 +284,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   ProjectsRoute: ProjectsRouteWithChildren,
   RemoteLaunchRoute: RemoteLaunchRoute,
+  TeamRoute: TeamRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

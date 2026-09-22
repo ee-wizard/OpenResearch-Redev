@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { listProjectActivityQuery } from "../queries/projects";
 import { m } from "../paraglide/messages.js";
 import { autoDir, ltr } from "../i18n";
-import { Plus, Trash2 } from "lucide-react";
+import { Blocks, Plus, Trash2 } from "lucide-react";
 import { GitHubMark } from "./BackendLogos";
 import { useEffect, useRef, useState } from "react";
 import {
@@ -214,12 +214,14 @@ export function ProjectsHome({
   onOpen,
   onCreated,
   onDeleted,
+  onOpenTeamLibrary,
   remote = false,
 }: {
   projects: Project[];
   onOpen: (id: string) => void;
   onCreated: (project: Project, githubPublicationError: string | null) => void;
   onDeleted: (id: string) => void;
+  onOpenTeamLibrary: () => void;
   remote?: boolean;
 }) {
   const [modalOpen, setModalOpen] = useState(false);
@@ -249,11 +251,16 @@ export function ProjectsHome({
       <AnimatedSection className="home-inner max-w-290 my-0 mx-auto pt-12 px-6 pb-16 [@media((max-width:_960px))]:pt-6 [@media((max-width:_960px))]:px-4">
         <div className="home-head flex items-center justify-between gap-3 mb-4.5 [&_h2]:m-0 [&_h2]:text-4xl [&_h2]:tracking-[-0.02em] [@media((max-width:_520px))]:items-start [@media((max-width:_520px))]:flex-col">
           <h2>{m.projects_home_projects()}</h2>
-          <Button
-            onClick={() => setModalOpen(true)}
-          >
-            <Plus size={15} /> {m.projects_home_new_project()}
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button onClick={onOpenTeamLibrary}>
+              <Blocks size={15} /> {m.team_shell_title()}
+            </Button>
+            <Button
+              onClick={() => setModalOpen(true)}
+            >
+              <Plus size={15} /> {m.projects_home_new_project()}
+            </Button>
+          </div>
         </div>
         <Card variant="default" padding="none" className="home-list overflow-hidden">
           <div>

@@ -1250,5 +1250,7 @@
   "team_papers_edit_notes": "备注",
   "team_papers_edit_source_url": "来源网址",
   "team_papers_delete_confirm": "删除“{title}”？此操作无法撤销。",
-  "team_papers_source_link": "打开来源"
+  "team_papers_source_link": "打开来源",
+  "team_shell_title": "团队资源库",
+  "team_shell_description": "团队共享的技能、智能体、科研手册章节、提示词片段与论文。跨项目共享，无论是否打开项目均可用。"
 }

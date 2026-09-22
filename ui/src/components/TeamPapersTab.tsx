@@ -133,7 +133,7 @@ function PaperEditor({
   onDone,
   onCancel,
 }: {
-  projectId: string;
+  projectId: string | null;
   paper: TeamPaper;
   onDone: () => void;
   onCancel: () => void;
@@ -208,7 +208,7 @@ function PaperEditor({
   );
 }
 
-function PaperTextPreview({ projectId, paperId }: { projectId: string; paperId: string }) {
+function PaperTextPreview({ projectId, paperId }: { projectId: string | null; paperId: string }) {
   const textQuery = useQuery(getTeamPaperTextQuery(projectId, paperId));
   if (textQuery.isPending) {
     return (
@@ -235,7 +235,7 @@ function PaperTextPreview({ projectId, paperId }: { projectId: string; paperId: 
   );
 }
 
-function PaperRow({ projectId, paper }: { projectId: string; paper: TeamPaper }) {
+function PaperRow({ projectId, paper }: { projectId: string | null; paper: TeamPaper }) {
   const [editing, setEditing] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const deleteMutation = useDeleteTeamPaper();
@@ -341,9 +341,10 @@ function PaperRow({ projectId, paper }: { projectId: string; paper: TeamPaper })
   );
 }
 
-/** Right-panel Team Papers tab: upload PDFs the research agent reads in every
- * session, edit their metadata, and inspect the extracted text. */
-export function TeamPapersTab({ projectId }: { projectId: string }) {
+/** Team Papers panel: upload PDFs the research agent reads in every session,
+ * edit their metadata, and inspect the extracted text. Omitting `projectId`
+ * uses the global scope — the team-wide papers shared across projects. */
+export function TeamPapersTab({ projectId = null }: { projectId?: string | null }) {
   const papersQuery = useQuery(listTeamPapersQuery(projectId));
   const uploadMutation = useUploadTeamPaper();
   const papers = papersQuery.data;

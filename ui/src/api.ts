@@ -1789,11 +1789,12 @@ export const deletePromptGist = (id: string, projectId?: string) =>
 
 // --- team papers ------------------------------------------------------------
 
-/** A PDF a project member shared with the agent. Mirrors the Rust `TeamPaper`
- * wire shape: `Option` fields serialize as `null`. */
+/** A PDF shared with the agent. `projectId === null` is the global scope served
+ * by `/api/team-papers`; a non-null id is that project's own papers. Mirrors the
+ * Rust `TeamPaper` wire shape: `Option` fields serialize as `null`. */
 export interface TeamPaper {
   id: string;
-  projectId: string;
+  projectId: string | null;
   filename: string;
   title: string | null;
   authors: string[];
@@ -1806,19 +1807,23 @@ export interface TeamPaper {
   updatedAt: number;
 }
 
-const teamPapersPath = (projectId: string) =>
-  `/api/projects/${encodeURIComponent(projectId)}/team-papers`;
+/** Global papers live at the root of the family; a project's papers nested
+ * under it, so the two scopes share one wire shape. */
+const teamPapersPath = (projectId: string | null) =>
+  projectId === null
+    ? "/api/team-papers"
+    : `/api/projects/${encodeURIComponent(projectId)}/team-papers`;
 
-const teamPaperPath = (projectId: string, paperId: string) =>
+const teamPaperPath = (projectId: string | null, paperId: string) =>
   `${teamPapersPath(projectId)}/${encodeURIComponent(paperId)}`;
 
-export const listTeamPapers = (projectId: string, signal?: AbortSignal) =>
+export const listTeamPapers = (projectId: string | null, signal?: AbortSignal) =>
   get<{ papers: TeamPaper[] }>(teamPapersPath(projectId), signal).then((r) => r.papers);
 
 /** Upload a PDF. `contentBase64` is the raw file bytes; the backend extracts
  * text best-effort, so a missing `pdftotext` still stores the paper. */
 export const uploadTeamPaper = (req: {
-  projectId: string;
+  projectId: string | null;
   filename: string;
   contentBase64: string;
   title?: string;
@@ -1840,7 +1845,7 @@ export const uploadTeamPaper = (req: {
 /** Update metadata. `null` clears an optional text field; `undefined` (omitted)
  * leaves it unchanged. */
 export const updateTeamPaper = (req: {
-  projectId: string;
+  projectId: string | null;
   id: string;
   title?: string | null;
   authors?: string[];
@@ -1856,12 +1861,12 @@ export const updateTeamPaper = (req: {
     sourceUrl: req.sourceUrl,
   }).then((r) => r.paper);
 
-export const deleteTeamPaper = (projectId: string, paperId: string) =>
+export const deleteTeamPaper = (projectId: string | null, paperId: string) =>
   writeResponse(teamPaperPath(projectId, paperId), { method: "DELETE" }).then((r) =>
     json<{ ok: boolean }>(r),
   );
 
-export const getTeamPaperText = (projectId: string, paperId: string, signal?: AbortSignal) =>
+export const getTeamPaperText = (projectId: string | null, paperId: string, signal?: AbortSignal) =>
   get<{ text: string }>(`${teamPaperPath(projectId, paperId)}/text`, signal).then((r) => r.text);
 
 // --- team library ------------------------------------------------------------

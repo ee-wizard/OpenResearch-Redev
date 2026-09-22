@@ -1250,5 +1250,7 @@
   "team_papers_edit_notes": "Notes",
   "team_papers_edit_source_url": "Source URL",
   "team_papers_delete_confirm": "Delete “{title}”? This cannot be undone.",
-  "team_papers_source_link": "Open source"
+  "team_papers_source_link": "Open source",
+  "team_shell_title": "کتابخانهٔ تیم",
+  "team_shell_description": "مهارت‌ها، عامل‌ها، فصل‌های راهنما، گزیده‌های پرامپت و مقاله‌های تیمی. میان پروژه‌ها مشترک‌اند و با یا بدون پروژهٔ باز در دسترس‌اند."
 }
