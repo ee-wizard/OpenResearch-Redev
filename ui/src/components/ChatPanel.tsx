@@ -27,6 +27,7 @@ import {
   ArrowDown,
   ArrowUpRight,
   Blocks,
+  Book,
   BookOpen,
   Check,
   ChevronLeft,
@@ -58,6 +59,7 @@ import {
   X,
 } from "lucide-react";
 import { createPortal } from "react-dom";
+import { AnimatePresence, motion } from "motion/react";
 import {
   memo,
   useCallback,
@@ -187,6 +189,7 @@ import {
   tableMarkdown,
 } from "./annotationMarkdown";
 import { Button, IconButton, Input, MenuItem, showAlert, Spinner } from "./ui";
+import { AnimatedSection } from "./rare-ui";
 import { useDialogFocus } from "./useDialogFocus";
 import { PaperTitle } from "./PaperTitle";
 
@@ -4257,6 +4260,8 @@ export function ChatPanel({
   onPreferredAgentChange,
   onOpenPromptGists,
   promptGistsActive = false,
+  onOpenHandbook,
+  handbookActive = false,
   children,
 }: {
   projectId: string;
@@ -4321,6 +4326,10 @@ export function ChatPanel({
   onOpenPromptGists?: () => void;
   /** Whether the Prompt Gists right-panel tab is currently active. */
   promptGistsActive?: boolean;
+  /** Open the Handbook tab in the right pane. */
+  onOpenHandbook?: () => void;
+  /** Whether the Handbook right-panel tab is currently active. */
+  handbookActive?: boolean;
   /** Middle-pane content when a settings section is active. */
   children?: React.ReactNode;
 }) {
@@ -5831,7 +5840,13 @@ export function ChatPanel({
   }, [startNewTask]);
 
   const rail = (
-    <aside className="session-rail w-68 shrink-0 flex flex-col mt-5 me-3.5 mb-5 ms-0 bg-background min-h-0 [&_.rail-body]:flex-1 [&_.rail-body]:min-h-0 [&_.rail-body]:overflow-y-auto [&_.rail-body]:pt-0 [&_.rail-body]:pb-1 [&_.rail-body]:px-2 border border-border rounded-2xl overflow-visible shadow-card">
+    <motion.aside
+      className="session-rail shrink-0 flex flex-col mt-5 mb-5 ms-0 bg-background min-h-0 [&_.rail-body]:flex-1 [&_.rail-body]:min-h-0 [&_.rail-body]:overflow-y-auto [&_.rail-body]:pt-0 [&_.rail-body]:pb-1 [&_.rail-body]:px-2 border border-border rounded-2xl overflow-hidden shadow-card"
+      initial={{ width: 0, opacity: 0, marginRight: 0 }}
+      animate={{ width: 272, opacity: 1, marginRight: 14 }}
+      exit={{ width: 0, opacity: 0, marginRight: 0 }}
+      transition={{ type: "spring", stiffness: 320, damping: 26 }}
+    >
       {railHeader}
       <nav className="rail-nav flex flex-col gap-0.5 p-2 shrink-0">
         <button
@@ -5858,6 +5873,15 @@ export function ChatPanel({
           >
             <Lightbulb size={15} />
             {m.prompt_gists_title()}
+          </button>
+        )}
+        {onOpenHandbook && (
+          <button
+            className={`rail-nav-item flex items-center gap-2.5 py-[7px] px-2.5 text-base text-text rounded-md text-start [&:hover:not(.active)]:bg-surface [&.active]:bg-panel [&.active]:font-medium ${handbookActive ? "active" : ""}`}
+            onClick={onOpenHandbook}
+          >
+            <Book size={15} />
+            {m.handbook_title()}
           </button>
         )}
         {SETTINGS_NAV.map((item) => (
@@ -5956,7 +5980,7 @@ export function ChatPanel({
           }}
         />
       )}
-    </aside>
+    </motion.aside>
   );
 
   const headerClass = `chat-header flex items-center gap-2 py-0 px-4 bg-background shrink-0 h-12 relative z-4 w-full max-w-readable my-0 mx-auto [&::after]:content-[''] [&::after]:absolute [&::after]:top-full [&::after]:start-0 [&::after]:end-0 [&::after]:h-6 [&::after]:bg-[linear-gradient(to_bottom,_var(--base),_transparent)] [&::after]:pointer-events-none`;
@@ -5973,10 +5997,16 @@ export function ChatPanel({
   if (mainView !== "chat") {
     return (
       <>
-        {railOpen && rail}
+        <AnimatePresence initial={false}>
+          {railOpen && rail}
+        </AnimatePresence>
         <section className="chat-pane flex-1 min-w-0 flex flex-col bg-background min-h-0">
           {!railOpen && <div className="flex h-12 shrink-0 items-center">{railReopen}</div>}
-          <div className="settings-view-scroll flex-1 min-h-0 overflow-y-auto [scrollbar-gutter:stable_both-edges]">{children}</div>
+          <div className="settings-view-scroll flex-1 min-h-0 overflow-y-auto [scrollbar-gutter:stable_both-edges]">
+            <AnimatedSection key={mainView} className="settings-view-contents">
+              {children}
+            </AnimatedSection>
+          </div>
         </section>
       </>
     );
@@ -5984,7 +6014,9 @@ export function ChatPanel({
 
   return (
     <>
-      {railOpen && rail}
+      <AnimatePresence initial={false}>
+        {railOpen && rail}
+      </AnimatePresence>
       <section className="chat-pane flex-1 min-w-0 flex flex-col bg-background min-h-0 mt-5">
         {/* Header — session title on the left, end-pane view switchers on the
           right, fading into the chat below (sessions live in the rail). */}

@@ -45,6 +45,7 @@ import {
   type RightTab,
   type ContentTab,
   type PromptGistsTabDef,
+  type HandbookTabDef,
   rightTabKey,
   withoutTab,
   isPresent,
@@ -64,6 +65,7 @@ import { m } from "./paraglide/messages.js";
 import { useLocale } from "./locale";
 import { autoDir } from "./i18n";
 import {
+  Book,
   ChartSpline,
   Check,
   FileCode,
@@ -107,6 +109,7 @@ import { WorktreeTab, type WorktreeView } from "./components/WorktreeTab";
 import { ArtifactsTab, findArtifactEntry } from "./components/ArtifactsTab";
 import { LibraryTab } from "./components/SkillsTab";
 import { PromptGistsTab } from "./components/PromptGistsTab";
+import { HandbookTab } from "./components/HandbookTab";
 import { ClosableTab } from "./components/ClosableTab";
 import { DetailDrawer, type ExperimentView } from "./components/DetailDrawer";
 import { FileViewer, type FileScrollPosition } from "./components/FileViewer";
@@ -385,6 +388,7 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
   const [artifactsTabOpen, setArtifactsTabOpen] = useState(false);
   const [terminalTabOpen, setTerminalTabOpen] = useState(false);
   const [promptGistsTabOpen, setPromptGistsTabOpen] = useState(false);
+  const [handbookTabOpen, setHandbookTabOpen] = useState(false);
   // Which checkout has a live shell; a restored-but-unselected tab spawns nothing until selected.
   const [terminalStartedFor, setTerminalStartedFor] = useState<string | null>(null);
   const [expTabs, setExpTabs] = useState<ExpViewDef[]>([]);
@@ -589,6 +593,7 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
     artifactsTabOpen,
     terminalTabOpen,
     promptGistsTabOpen,
+    handbookTabOpen,
     expTabs,
     fileTabs,
     planTabs,
@@ -620,6 +625,7 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
     setArtifactsTabOpen(state.artifactsTabOpen);
     setTerminalTabOpen(state.terminalTabOpen);
     setPromptGistsTabOpen(state.promptGistsTabOpen);
+    setHandbookTabOpen(state.handbookTabOpen);
     setExpTabs(state.expTabs);
     setFileTabs(state.fileTabs);
     setPlanTabs((current) => current === state.planTabs ? current : state.planTabs.map((tab) => ({ ...tab, plan: current.find((item) => item.sessionId === tab.sessionId && item.promptId === tab.promptId)?.plan ?? "" })));
@@ -879,6 +885,11 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
   const openPromptGistsTab = useCallback(() => {
     setPromptGistsTabOpen(true);
     selectRightTab("promptGists");
+  }, [selectRightTab]);
+
+  const openHandbookTab = useCallback(() => {
+    setHandbookTabOpen(true);
+    selectRightTab("handbook");
   }, [selectRightTab]);
   const terminalKey = activeSessionId ?? (projectId ? `project:${projectId}` : null);
   useEffect(() => {
@@ -1332,7 +1343,7 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
   }, [selectRightTab]);
 
   const closeHomeTab = useCallback(
-    (tab: "experiments" | "files" | "artifacts" | "terminal" | PromptGistsTabDef) => {
+    (tab: "experiments" | "files" | "artifacts" | "terminal" | PromptGistsTabDef | HandbookTabDef) => {
       if (tab === "experiments") setExperimentsTabOpen(false);
       else if (tab === "files") setFilesTabOpen(false);
       else if (tab === "terminal") {
@@ -1340,6 +1351,7 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
         setTerminalStartedFor(null);
       }
       else if (tab === "promptGists") setPromptGistsTabOpen(false);
+      else if (tab === "handbook") setHandbookTabOpen(false);
       else setArtifactsTabOpen(false);
       forgetRightTab(tab, rightTab === tab);
     },
@@ -1629,6 +1641,8 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
             onPreferredAgentChange={persistPreferredAgent}
             onOpenPromptGists={openPromptGistsTab}
             promptGistsActive={rightTab === "promptGists"}
+            onOpenHandbook={openHandbookTab}
+            handbookActive={rightTab === "handbook"}
           >
             {mainView === "skills" ? (
               <LibraryTab />
@@ -1721,6 +1735,15 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
                     icon={<Lightbulb size={12} className="shrink-0" />}
                     onSelect={() => selectRightTab("promptGists")}
                     onClose={() => closeHomeTab("promptGists")}
+                  />
+                )}
+                {handbookTabOpen && (
+                  <ClosableTab
+                    active={rightTab === "handbook"}
+                    label={m.handbook_title()}
+                    icon={<Book size={12} className="shrink-0" />}
+                    onSelect={() => selectRightTab("handbook")}
+                    onClose={() => closeHomeTab("handbook")}
                   />
                 )}
                 {orderedContentTabs.map(renderContentTab)}
@@ -1888,6 +1911,10 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
                 {activeProject && (
                   <PromptGistsTab projectId={activeProject.id} />
                 )}
+              </TabBody>
+            ) : rightTab === "handbook" ? (
+              <TabBody className="p-0">
+                <HandbookTab />
               </TabBody>
             ) : rightTab === "files" ? (
               <TabBody>

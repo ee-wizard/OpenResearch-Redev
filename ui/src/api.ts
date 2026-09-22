@@ -1789,7 +1789,7 @@ export const deletePromptGist = (id: string, projectId?: string) =>
 // --- team library ------------------------------------------------------------
 
 export type LibraryKind = "skill" | "agent";
-export type LibrarySource = "builtin" | "team" | "project";
+export type LibrarySource = "builtin" | "team" | "project" | "supervisor";
 
 export interface LibraryItem {
   id: string;
@@ -1844,9 +1844,28 @@ export const deleteLibraryItem = (kind: LibraryKind, id: string, source: Library
     { method: "DELETE" },
   ).then((r) => json<{ deleted: boolean }>(r));
 
+// --- handbook ----------------------------------------------------------------
+
+export interface HandbookChapter {
+  id: string;
+  title: string;
+  filePath: string;
+}
+
+export const listHandbookChapters = (signal?: AbortSignal) =>
+  get<{ chapters: HandbookChapter[] }>("/api/handbook", signal).then((r) => r.chapters);
+
+export const getHandbookChapter = (id: string, signal?: AbortSignal) =>
+  get<{ id: string; content: string }>(`/api/handbook/${encodeURIComponent(id)}`, signal).then(
+    (r) => r.content,
+  );
+
+export const saveHandbookChapter = (id: string, content: string) =>
+  patch<{ saved: boolean }>(`/api/handbook/${encodeURIComponent(id)}`, { content });
+
 // --- chat attachments ------------------------------------------------------
 
-export type ChatAttachmentSource = "builtin" | "team" | "user" | "mirrored" | "project";
+export type ChatAttachmentSource = "builtin" | "team" | "supervisor" | "user" | "mirrored" | "project";
 
 export interface ChatAttachmentSkill {
   id: string;

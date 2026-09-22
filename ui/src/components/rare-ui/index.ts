@@ -1,5 +1,9 @@
 export { AnimatedCard } from "./AnimatedCard";
 export type { AnimatedCardProps } from "./AnimatedCard";
+export { AnimatedRow } from "./AnimatedRow";
+export type { AnimatedRowProps } from "./AnimatedRow";
+export { AnimatedSection } from "./AnimatedSection";
+export type { AnimatedSectionProps } from "./AnimatedSection";
 export { BounceSidebar } from "./BounceSidebar";
 export type { BounceSidebarProps, BounceSidebarItem } from "./BounceSidebar";
 export { StaggerList, StaggerItem } from "./StaggerList";

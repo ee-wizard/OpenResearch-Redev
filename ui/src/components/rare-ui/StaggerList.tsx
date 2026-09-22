@@ -17,12 +17,14 @@ const itemVariants = {
 
 export type StaggerListProps = HTMLMotionProps<"div"> & {
   staggerDelay?: number;
+  itemHover?: "none" | "lift" | "scale";
 };
 
 export function StaggerList({
   className,
   children,
   staggerDelay,
+  itemHover = "none",
   ...props
 }: StaggerListProps) {
   const reduced = useReducedMotion();
@@ -47,7 +49,7 @@ export function StaggerList({
       {Children.toArray(children as ReactNode).map((child, index) => {
         if (!isValidElement(child)) return child;
         return (
-          <StaggerItem key={String(child.key ?? index)}>
+          <StaggerItem key={String(child.key ?? index)} hover={itemHover}>
             {child as ReactNode}
           </StaggerItem>
         );
@@ -56,13 +58,31 @@ export function StaggerList({
   );
 }
 
-export type StaggerItemProps = HTMLMotionProps<"div">;
+export type StaggerItemProps = HTMLMotionProps<"div"> & {
+  hover?: "none" | "lift" | "scale";
+};
 
-export function StaggerItem({ className, children, ...props }: StaggerItemProps) {
+export function StaggerItem({
+  className,
+  hover = "none",
+  children,
+  ...props
+}: StaggerItemProps) {
+  const reduced = useReducedMotion();
+  const hoverMotion =
+    reduced || hover === "none"
+      ? undefined
+      : hover === "lift"
+        ? { y: -3 }
+        : { scale: 1.01 };
+
   return (
     <motion.div
       className={cn(className)}
       variants={itemVariants}
+      whileHover={hoverMotion}
+      whileTap={reduced || hover === "none" ? undefined : { scale: 0.995 }}
+      transition={{ type: "spring", stiffness: 420, damping: 22 }}
       {...props}
     >
       {children}

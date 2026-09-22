@@ -19,6 +19,7 @@ pub mod experiments;
 pub mod files;
 pub mod git;
 pub mod github;
+pub mod handbook;
 pub mod harness;
 pub mod hf;
 pub mod k8s;

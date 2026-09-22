@@ -24,6 +24,7 @@ export function paneTab(pane: Pane): RightTab {
     case "plan": return { kind: "plan", sessionId: pane.sessionId, promptId: pane.promptId, plan: "" };
     case "subagent": return { kind: "subagent", sessionId: pane.sessionId, spawnPartId: pane.spawnPartId };
     case "promptGists": return "promptGists";
+    case "handbook": return "handbook";
   }
 }
 
@@ -34,6 +35,7 @@ export function rememberWorkspace(state: RightPaneSessionState, scroll: TaskWork
   if (state.artifactsTabOpen) home.push("artifacts");
   if (state.experimentsTabOpen) home.push("experiments");
   if (state.promptGistsTabOpen) home.push("promptGists");
+  if (state.handbookTabOpen) home.push("handbook");
   const content = [...state.expTabs, ...state.fileTabs, ...state.planTabs, ...state.subagentTabs, ...state.codeTabs];
   const byKey = new Map(content.map((tab) => [rightTabKey(tab), tab]));
   const ordered = state.contentTabOrder.flatMap((key) => { const tab = byKey.get(key); return tab ? [tab] : []; });
@@ -70,6 +72,7 @@ export function restoreWorkspace(saved: TaskWorkspace | undefined, pane: Pane | 
       if (tab === "artifacts") state.artifactsTabOpen = true;
       if (tab === "terminal") state.terminalTabOpen = true;
       if (tab === "promptGists") state.promptGistsTabOpen = true;
+      if (tab === "handbook") state.handbookTabOpen = true;
       continue;
     }
     if ("code" in tab) { tab.toggled = new Set(saved?.expanded[rightTabKey(tab)] ?? []); state.codeTabs.push(tab); }
@@ -187,6 +190,7 @@ export interface CodeTabDef {
 export const sameCodeTab = (a: CodeTabDef, b: CodeTabDef) => a.branch === b.branch;
 
 export type PromptGistsTabDef = "promptGists";
+export type HandbookTabDef = "handbook";
 
 export type RightTab =
   | "experiments"
@@ -194,6 +198,7 @@ export type RightTab =
   | "artifacts"
   | "terminal"
   | PromptGistsTabDef
+  | HandbookTabDef
   | ExpViewDef
   | FileViewDef
   | PlanViewDef
@@ -231,6 +236,7 @@ export interface RightPaneSessionState {
   artifactsTabOpen: boolean;
   terminalTabOpen: boolean;
   promptGistsTabOpen: boolean;
+  handbookTabOpen: boolean;
   expTabs: ExpViewDef[];
   fileTabs: FileViewDef[];
   planTabs: PlanViewDef[];
@@ -261,6 +267,7 @@ export function initialRightPaneSessionState(
     artifactsTabOpen: false,
     terminalTabOpen: false,
     promptGistsTabOpen: false,
+    handbookTabOpen: false,
     expTabs: [],
     fileTabs: [],
     planTabs: [],
@@ -337,11 +344,12 @@ export function applyPane(state: RightPaneSessionState, pane: Pane | undefined):
     return tabs.map((item, i) => i === index ? { ...item, ...target } : item);
   };
   const next = { ...state };
-  if (typeof tab === "string") {
+    if (typeof tab === "string") {
     if (tab === "files") next.filesTabOpen = true;
     else if (tab === "artifacts") next.artifactsTabOpen = true;
     else if (tab === "terminal") next.terminalTabOpen = true;
     else if (tab === "promptGists") next.promptGistsTabOpen = true;
+    else if (tab === "handbook") next.handbookTabOpen = true;
     else next.experimentsTabOpen = true;
   } else {
     if ("path" in tab) next.fileTabs = update(state.fileTabs, tab);

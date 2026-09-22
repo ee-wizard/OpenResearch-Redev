@@ -30,11 +30,12 @@ import {
 } from "../api";
 import { Badge, Button, IconButton, Input, Spinner } from "./ui";
 import { usePopover } from "./ModelPicker";
+import { StaggerList } from "./rare-ui";
 
 const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
 
 const CARD_CLASS_NAME =
-  "bg-background border border-border rounded-lg py-4 px-4.5 mb-4 [&_h3]:mt-0 [&_h3]:mx-0 [&_h3]:mb-2.5 [&_h3]:text-base [&_h3]:font-semibold [&_h3]:text-text";
+  "bg-background border border-border rounded-lg py-4 px-4.5 mb-4 transition-[transform,box-shadow] duration-200 ease-standard motion-safe:hover:-translate-y-0.5 hover:shadow-elevated [&_h3]:mt-0 [&_h3]:mx-0 [&_h3]:mb-2.5 [&_h3]:text-base [&_h3]:font-semibold [&_h3]:text-text";
 const CARD_SUB_CLASS_NAME = "mt-0 mx-0 mb-3 text-sm leading-relaxed text-text";
 const SKILL_ROW_CLASS_NAME =
   "flex items-start gap-3 py-2.5 border-t border-t-border first:border-t-0";
@@ -331,9 +332,11 @@ function SkillsCard() {
       ) : (
         <div className="relative mt-1">
           <div ref={listRef} onScroll={updateScrollFade} className="flex flex-col max-h-120 overflow-y-auto overscroll-contain">
-            {skills.map((s) => (
-              <SkillRow key={s.name} skill={s} onError={setError} />
-            ))}
+            <StaggerList className="contents" itemHover="lift">
+              {skills.map((s) => (
+                <SkillRow key={s.name} skill={s} onError={setError} />
+              ))}
+            </StaggerList>
           </div>
           {hasMoreAbove && (
             <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 top-0 h-10 bg-gradient-to-b from-background to-transparent" />
@@ -420,9 +423,11 @@ function LatexTemplatesCard() {
         <div className="pt-3 text-sm text-subtext">{m.skills_tab_no_templates_yet()}</div>
       ) : (
         <div className="flex flex-col mt-1">
-          {templates.map((t) => (
-            <LatexTemplateRow key={t.name} template={t} onError={setError} />
-          ))}
+          <StaggerList className="contents" itemHover="lift">
+            {templates.map((t) => (
+              <LatexTemplateRow key={t.name} template={t} onError={setError} />
+            ))}
+          </StaggerList>
         </div>
       )}
     </section>
@@ -437,6 +442,12 @@ function sourceBadge(source: string) {
       return (
         <Badge size="small" variant="primary">
           {m.library_team()}
+        </Badge>
+      );
+    case "supervisor":
+      return (
+        <Badge size="small" variant="primary">
+          {m.library_supervisor()}
         </Badge>
       );
     case "project":
@@ -563,7 +574,7 @@ function LibraryRow({
         >
           <FileText size={13} />
         </IconButton>
-        {item.source === "team" && (
+        {(item.source === "team" || item.source === "supervisor") && (
           <IconButton
             size="small"
             data-tip={m.prompt_gists_delete()}
@@ -691,9 +702,11 @@ function LibrarySection({
         <div className="pt-3 text-sm text-subtext">{m.library_empty()}</div>
       ) : (
         <div className="flex flex-col mt-1">
-          {items.map((item) => (
-            <LibraryRow key={`${item.kind}-${item.id}-${item.source}`} item={item} onError={setError} />
-          ))}
+          <StaggerList className="contents" itemHover="lift">
+            {items.map((item) => (
+              <LibraryRow key={`${item.kind}-${item.id}-${item.source}`} item={item} onError={setError} />
+            ))}
+          </StaggerList>
         </div>
       )}
       <LibraryCreateRow kind={kind} onDone={() => { void teamQuery.refetch(); }} onError={setError} />
@@ -704,6 +717,7 @@ function LibrarySection({
 const SKILL_SOURCE_ORDER: ChatAttachmentSource[] = [
   "builtin",
   "team",
+  "supervisor",
   "user",
   "mirrored",
   "project",
@@ -712,6 +726,7 @@ const SKILL_SOURCE_ORDER: ChatAttachmentSource[] = [
 const SKILL_SOURCE_LABELS: Record<ChatAttachmentSource, string> = {
   builtin: m.library_built_in(),
   team: m.library_team(),
+  supervisor: m.library_supervisor(),
   user: "User/Uploaded",
   mirrored: "Mirrored",
   project: m.library_project(),
@@ -839,6 +854,58 @@ export function LibraryPicker({
   );
 }
 
+function SupervisorSection() {
+  const [error, setError] = useState<string | null>(null);
+  const query = useQuery(listLibraryItemsQuery("skill", "supervisor"));
+  const items = query.data ?? [];
+  const loading = query.isPending;
+  const loadError = query.error?.message;
+
+  return (
+    <section className={CARD_CLASS_NAME}>
+      <div className="flex items-baseline gap-2.5">
+        <h3>{m.library_supervisor()}</h3>
+        <Button
+          className="ms-auto"
+          size="small"
+          onClick={() => void query.refetch()}
+          disabled={loading}
+        >
+          <RefreshCw size={12} className={loading ? "animate-[spin_0.9s_linear_infinite]" : ""} />{" "}
+          {m.settings_page_refresh()}
+        </Button>
+      </div>
+      {error && (
+        <div role="alert" className="mt-2.5 text-base text-accent-red whitespace-pre-wrap">
+          {error}
+        </div>
+      )}
+      {loadError && (
+        <div role="alert" className="pt-3 text-base text-accent-red">
+          {m.common_failed_to_load({ error: loadError })}
+        </div>
+      )}
+      {loading ? (
+        <div className="flex items-center gap-2 pt-3 text-sm text-subtext">
+          <Spinner /> {m.common_loading()}
+        </div>
+      ) : items.length === 0 ? (
+        <div className="pt-3 text-sm text-subtext">{m.library_supervisor_empty()}</div>
+      ) : (
+        <div className="flex flex-col mt-1">
+          {items.map((item) => (
+            <LibraryRow
+              key={`${item.kind}-${item.id}-${item.source}`}
+              item={item}
+              onError={setError}
+            />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
 /** Middle-pane Library tab — editable team skills, agent shims, plus the
  * uploaded user skills and LaTeX templates that already lived here. */
 export function LibraryTab() {
@@ -851,6 +918,7 @@ export function LibraryTab() {
 
       <LibrarySection kind="skill" title={m.skills_tab_skills()} />
       <LibrarySection kind="agent" title={m.library_agents()} />
+      <SupervisorSection />
       <SkillsCard />
       <LatexTemplatesCard />
     </div>

@@ -266,6 +266,10 @@ pub async fn run(args: UpArgs) -> Result<()> {
     // Seed the editable team library so later reads (harness shims, session
     // skills, and the library API) operate from the data dir copies.
     local::library::ensure_team_library()?;
+    if let Err(err) = local::library::ensure_supervisor_skills() {
+        eprintln!("orx up: supervisor skills not available: {err}");
+    }
+    local::handbook::ensure_handbook()?;
 
     // Open early so the schema exists before any request or agent spawn.
     {
@@ -897,6 +901,8 @@ fn router(state: AppState, remote_auth: Option<RemoteAuth>) -> Router {
                 .patch(update_library_item)
                 .delete(delete_library_item),
         )
+        .route("/api/handbook", get(list_handbook))
+        .route("/api/handbook/{id}", get(get_handbook).patch(update_handbook))
         .route("/api/chat/attachments", get(list_chat_attachments))
         .route(
             "/api/chat/sessions",
@@ -1392,6 +1398,7 @@ fn parse_library_source(
         "builtin" => Ok(crate::local::library::LibrarySource::BuiltIn),
         "team" => Ok(crate::local::library::LibrarySource::Team),
         "project" => Ok(crate::local::library::LibrarySource::Project),
+        "supervisor" => Ok(crate::local::library::LibrarySource::Supervisor),
         _ => Err(bad_request(format!("invalid library source: {s}"))),
     }
 }
@@ -1500,16 +1507,51 @@ async fn delete_library_item(
         .as_deref()
         .map(parse_library_source)
         .unwrap_or(Ok(crate::local::library::LibrarySource::Team))?;
-    if source != crate::local::library::LibrarySource::Team {
-        return Err(bad_request("only team library items can be deleted"));
+    if source != crate::local::library::LibrarySource::Team
+        && source != crate::local::library::LibrarySource::Supervisor
+    {
+        return Err(bad_request("only team or supervisor library items can be deleted"));
     }
     let deleted = tokio::task::spawn_blocking(move || {
-        crate::local::library::delete_team_library_item(kind, &id)
+        crate::local::library::delete_library_item(kind, &id, source)
     })
     .await
     .map_err(|e| ApiError::from(anyhow!("library task failed: {e}")))?
     .map_err(bad_request)?;
     Ok(Json(json!({ "deleted": deleted })))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateHandbookReq {
+    content: String,
+}
+
+async fn list_handbook() -> ApiResult {
+    let chapters = tokio::task::spawn_blocking(crate::local::handbook::list_chapters)
+        .await
+        .map_err(|e| ApiError::from(anyhow!("handbook task failed: {e}")))?
+        .map_err(bad_request)?;
+    Ok(Json(json!({ "chapters": chapters })))
+}
+
+async fn get_handbook(Path(id): Path<String>) -> ApiResult {
+    let content = tokio::task::spawn_blocking({
+        let id = id.clone();
+        move || crate::local::handbook::get_chapter(&id)
+    })
+    .await
+    .map_err(|e| ApiError::from(anyhow!("handbook task failed: {e}")))?
+    .map_err(bad_request)?;
+    Ok(Json(json!({ "id": id, "content": content })))
+}
+
+async fn update_handbook(Path(id): Path<String>, Json(req): Json<UpdateHandbookReq>) -> ApiResult {
+    tokio::task::spawn_blocking(move || crate::local::handbook::save_chapter(&id, &req.content))
+        .await
+        .map_err(|e| ApiError::from(anyhow!("handbook task failed: {e}")))?
+        .map_err(bad_request)?;
+    Ok(Json(json!({ "saved": true })))
 }
 
 /// Unified catalog for the chat composer picker: every insertable skill

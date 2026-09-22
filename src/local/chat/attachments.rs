@@ -124,6 +124,22 @@ fn build_skills() -> Result<Vec<ChatAttachmentSkill>> {
         });
     }
 
+    // Supervisor skills cloned from the Supervisor-Skills repository.
+    for item in library::list_library_items(Some(library::LibraryKind::Skill), library::LibrarySource::Supervisor)? {
+        let content = read_skill_body(&item.file_path);
+        let description = frontmatter_description(&item.file_path);
+        skills.push(ChatAttachmentSkill {
+            id: item.id.clone(),
+            name: item.name.clone(),
+            source: "supervisor".to_string(),
+            file_path: item.file_path.to_string_lossy().into_owned(),
+            description,
+            content_preview: content.as_deref().map(preview_of),
+            scope: Some("global".to_string()),
+            content,
+        });
+    }
+
     // User-uploaded skills.
     for (skill, path) in user_skills::list_uploaded_with_paths() {
         let content = read_skill_body(&path.join("SKILL.md"));

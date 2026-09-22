@@ -37,6 +37,7 @@ pub enum LibrarySource {
     BuiltIn,
     Team,
     Project,
+    Supervisor,
 }
 
 /// One item in the team library.
@@ -123,6 +124,48 @@ fn ensure_agents_library() -> Result<()> {
     Ok(())
 }
 
+const SUPERVISOR_SKILLS_URL: &str = "git@github.com:HKUSTDial/Supervisor-Skills.git";
+
+/// `<data_dir>/library/skills/.supervisor`
+pub fn supervisor_skills_dir() -> PathBuf {
+    library_dir().join("skills").join(".supervisor")
+}
+
+/// Clone or pull the Supervisor-Skills repository so its skill packages are
+/// available as a deletable built-in source. Returns an error when git is
+/// unavailable or the network/SSH operation fails; callers decide whether to
+/// treat this as fatal.
+pub fn ensure_supervisor_skills() -> Result<()> {
+    let path = supervisor_skills_dir();
+    if !path.exists() {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let status = std::process::Command::new("git")
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env("GIT_SSH_COMMAND", "ssh -o BatchMode=yes")
+            .args(["clone", "--depth", "1", SUPERVISOR_SKILLS_URL])
+            .arg(&path)
+            .status()
+            .map_err(|e| anyhow!("Failed to spawn git clone for supervisor skills: {e}"))?;
+        if !status.success() {
+            return Err(anyhow!("git clone failed for supervisor skills: {status}"));
+        }
+    } else {
+        let status = std::process::Command::new("git")
+            .current_dir(&path)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env("GIT_SSH_COMMAND", "ssh -o BatchMode=yes")
+            .args(["pull", "--ff-only"])
+            .status()
+            .map_err(|e| anyhow!("Failed to spawn git pull for supervisor skills: {e}"))?;
+        if !status.success() {
+            return Err(anyhow!("git pull failed for supervisor skills: {status}"));
+        }
+    }
+    Ok(())
+}
+
 /// List library items filtered by kind and source.
 pub fn list_library_items(
     kind: Option<LibraryKind>,
@@ -175,6 +218,9 @@ pub fn write_library_content(
         (LibraryKind::Skill, LibrarySource::Team) => {
             library_dir().join("skills").join("team").join(id).join("SKILL.md")
         }
+        (LibraryKind::Skill, LibrarySource::Supervisor) => {
+            supervisor_skills_dir().join(id).join("SKILL.md")
+        }
         (LibraryKind::Agent, LibrarySource::BuiltIn) => {
             library_dir().join("agents").join(id).join("shim.md")
         }
@@ -183,6 +229,9 @@ pub fn write_library_content(
         }
         (_, LibrarySource::Project) => {
             return Err(anyhow!("Project-scoped library items are not editable here"))
+        }
+        (LibraryKind::Agent, LibrarySource::Supervisor) => {
+            return Err(anyhow!("Supervisor source only supports skills"))
         }
     };
     if let Some(parent) = path.parent() {
@@ -227,19 +276,24 @@ pub fn create_team_library_item(
     ))
 }
 
-/// Delete a team-owned library item. Returns `true` if it existed.
-/// Built-in items cannot be deleted.
-pub fn delete_team_library_item(kind: LibraryKind, id: &str) -> Result<bool> {
+/// Delete a library item. Returns `true` if it existed.
+/// Built-in items cannot be deleted; supervisor skills can be deleted, which
+/// removes the cloned directory.
+pub fn delete_library_item(kind: LibraryKind, id: &str, source: LibrarySource) -> Result<bool> {
     ensure_team_library()?;
-    let dir = match kind {
-        LibraryKind::Skill => library_dir().join("skills").join("team").join(id),
-        LibraryKind::Agent => library_dir().join("agents").join(id),
+    let dir = match (kind, source) {
+        (LibraryKind::Skill, LibrarySource::Team) => {
+            library_dir().join("skills").join("team").join(id)
+        }
+        (LibraryKind::Skill, LibrarySource::Supervisor) => supervisor_skills_dir().join(id),
+        (LibraryKind::Agent, LibrarySource::Team) => library_dir().join("agents").join(id),
+        _ => return Err(anyhow!("Cannot delete {source:?} {kind}")),
     };
     if !dir.exists() {
         return Ok(false);
     }
     match kind {
-        LibraryKind::Skill if is_builtin_skill(id) => {
+        LibraryKind::Skill if is_builtin_skill(id) && source == LibrarySource::Team => {
             return Err(anyhow!("Cannot delete built-in skill {id}"))
         }
         LibraryKind::Agent if is_builtin_agent(id) => {
@@ -292,7 +346,44 @@ fn list_skills(source: LibrarySource) -> Result<Vec<LibraryItem>> {
             LibrarySource::Team,
         ),
         LibrarySource::Project => Ok(Vec::new()),
+        LibrarySource::Supervisor => list_supervisor_skills(),
     }
+}
+
+fn list_supervisor_skills() -> Result<Vec<LibraryItem>> {
+    let base = supervisor_skills_dir();
+    let mut items = Vec::new();
+    if !base.exists() {
+        return Ok(items);
+    }
+    for entry in std::fs::read_dir(&base)? {
+        let entry = entry?;
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let file_path = path.join("SKILL.md");
+        if !file_path.exists() {
+            continue;
+        }
+        let id = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_string();
+        let name = std::fs::read_to_string(&file_path)
+            .ok()
+            .and_then(|content| parse_name_from_frontmatter(&content))
+            .unwrap_or_else(|| id.clone());
+        items.push(LibraryItem::new(
+            id,
+            LibraryKind::Skill,
+            name,
+            LibrarySource::Supervisor,
+            file_path,
+        ));
+    }
+    Ok(items)
 }
 
 fn list_builtin_skills() -> Result<Vec<LibraryItem>> {
@@ -335,7 +426,7 @@ fn list_agents(source: LibrarySource) -> Result<Vec<LibraryItem>> {
         let matches_source = match source {
             LibrarySource::BuiltIn => is_builtin,
             LibrarySource::Team => !is_builtin,
-            LibrarySource::Project => false,
+            LibrarySource::Project | LibrarySource::Supervisor => false,
         };
         if !matches_source {
             continue;
@@ -400,6 +491,7 @@ fn get_skill_item(id: &str, source: LibrarySource) -> Result<Option<LibraryItem>
             .join(id)
             .join("SKILL.md"),
         LibrarySource::Project => return Ok(None),
+        LibrarySource::Supervisor => supervisor_skills_dir().join(id).join("SKILL.md"),
     };
     if !path.exists() {
         return Ok(None);

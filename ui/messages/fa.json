@@ -1220,5 +1220,11 @@
   "library_content_placeholder": "Markdown content…",
   "library_insert": "Insert skill or agent",
   "library_empty": "No library items yet.",
+  "library_supervisor": "Supervisor",
+  "library_supervisor_empty": "No supervisor skills cloned yet. They are fetched from the Supervisor-Skills repository on startup.",
+  "handbook_title": "Handbook",
+  "handbook_empty": "No handbook chapters yet.",
+  "handbook_edit": "Edit",
+  "handbook_cancel": "Cancel",
   "new_project_folder_picker_fallback": "No native folder picker is available. Type or paste the folder path below."
 }
