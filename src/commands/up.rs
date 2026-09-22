@@ -2355,6 +2355,11 @@ async fn delete_project(State(state): State<AppState>, Path(id): Path<String>) -
         local::chat::cleanup_session_transcript_artifacts(&session.id);
         local::chat::cleanup_session_worktree(&project, &session.id);
     }
+    // The rows are gone; take the uploaded PDFs with them so the project
+    // directory holds no unreferenced orx data.
+    if let Err(err) = team_papers::remove_team_papers_dir(&project) {
+        eprintln!("orx up: could not remove team papers for project {id}: {err}");
+    }
     Ok(Json(json!({ "ok": true })))
 }
 

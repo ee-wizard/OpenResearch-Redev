@@ -164,6 +164,19 @@ pub fn delete_team_paper(store: &Store, project: &LocalProject, paper_id: &str) 
     Ok(())
 }
 
+/// Remove every stored paper file for a project. Used when the project itself
+/// is deleted: the store rows go with it, so the uploaded PDFs and extracted
+/// texts under `<project_dir>/.openresearch/team-papers/` would otherwise stay
+/// behind as unreferenced orphans. Only that orx-owned subtree is touched.
+pub fn remove_team_papers_dir(project: &LocalProject) -> Result<()> {
+    let dir = team_papers_dir(project);
+    if dir.exists() {
+        std::fs::remove_dir_all(&dir)
+            .map_err(|e| anyhow!("Could not remove {}: {}", dir.display(), e))?;
+    }
+    Ok(())
+}
+
 /// Read the extracted plain text for a paper.
 pub fn read_text(project: &LocalProject, paper_id: &str) -> Result<String> {
     validate_paper_id(paper_id)?;
@@ -336,6 +349,43 @@ mod tests {
         delete_team_paper(&store, &project, &paper.id).unwrap();
         assert!(store.get_team_paper(&paper.id).unwrap().is_none());
         assert!(!paper_pdf_path(&project, &paper.id).exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Deleting the project drops the rows, so the uploaded files have to go with
+    /// them or they stay behind as unreferenced orphans.
+    #[test]
+    fn remove_team_papers_dir_clears_every_paper_tree() {
+        let dir = std::env::temp_dir().join(format!("orx-team-papers-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let project = project_fixture(&dir);
+        let store = Store::open_at(dir.join("store")).unwrap();
+        store.create_local_project(&project).unwrap();
+        let encoded = base64::engine::general_purpose::STANDARD.encode(pdf_bytes());
+        for name in ["one.pdf", "two.pdf"] {
+            save_team_paper(
+                &store,
+                &project,
+                CreateTeamPaperReq {
+                    filename: name.to_string(),
+                    content_base64: encoded.clone(),
+                    title: None,
+                    authors: None,
+                    tags: None,
+                    notes: None,
+                    source_url: None,
+                },
+            )
+            .unwrap();
+        }
+        assert_eq!(store.list_team_papers(&project.id).unwrap().len(), 2);
+        assert!(team_papers_dir(&project).is_dir());
+
+        remove_team_papers_dir(&project).unwrap();
+        assert!(!team_papers_dir(&project).exists());
+        // The rest of the project directory is untouched.
+        assert!(dir.is_dir());
 
         let _ = std::fs::remove_dir_all(&dir);
     }

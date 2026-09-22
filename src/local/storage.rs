@@ -272,17 +272,44 @@ fn references(data: &Path, mappings: &[(PathBuf, PathBuf)]) -> Result<References
             data.join("orx.db"),
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
         )?;
-        let mut projects = connection.prepare("SELECT repo_path FROM local_projects")?;
-        for path in projects.query_map([], |row| row.get::<_, String>(0))? {
-            let path = path?;
-            let old = PathBuf::from(&path);
-            let new = mapped(&old, mappings);
-            if new != old {
-                result
-                    .projects
-                    .push((path, new.to_string_lossy().into_owned()));
+        // A database written before `project_dir` existed has not been through
+        // `Store::open`'s ALTER yet (`prepare` runs first, before any command
+        // opens the store), so read the column only when it is there.
+        let has_project_dir: bool = connection.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('local_projects') WHERE name = 'project_dir'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )? > 0;
+        let query = if has_project_dir {
+            "SELECT repo_path, project_dir FROM local_projects"
+        } else {
+            "SELECT repo_path, repo_path FROM local_projects"
+        };
+        let mut projects = connection.prepare(query)?;
+        for row in projects.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })? {
+            let (repo_path, project_dir) = row?;
+            let repo = PathBuf::from(&repo_path);
+            let moved_repo = mapped(&repo, mappings);
+            if moved_repo != repo {
+                result.projects.push((
+                    repo_path.clone(),
+                    moved_repo.to_string_lossy().into_owned(),
+                ));
             }
-            repos.insert(new);
+            repos.insert(moved_repo);
+            // The project dir roots the session worktrees and the team papers;
+            // it defaults to the repo path, so it carries the same mappings.
+            if project_dir != repo_path {
+                let dir = PathBuf::from(&project_dir);
+                let moved_dir = mapped(&dir, mappings);
+                if moved_dir != dir {
+                    result
+                        .projects
+                        .push((project_dir, moved_dir.to_string_lossy().into_owned()));
+                }
+            }
         }
         let legacy = super::native_store::opencode_db(super::native_store::NativeStore::Legacy);
         if legacy != native {
@@ -524,6 +551,18 @@ mod tests {
                         .unwrap()
                         .unwrap()
                         .repo_path
+                ),
+                moved_repo
+            );
+            // The project dir (session worktrees + team papers root) defaults to
+            // the repo path and must follow the same move.
+            assert_eq!(
+                PathBuf::from(
+                    store
+                        .get_local_project(&project.id)
+                        .unwrap()
+                        .unwrap()
+                        .project_dir
                 ),
                 moved_repo
             );

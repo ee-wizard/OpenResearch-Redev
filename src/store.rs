@@ -380,13 +380,19 @@ pub struct Store {
 }
 
 impl Store {
+    /// Rewrite every stored project path that matches `old` onto `new`. Both
+    /// path columns move: `project_dir` holds the session-worktree root and the
+    /// team-papers root, so a relocation that only fixed `repo_path` would leave
+    /// those pointing into the vacated tree.
     pub(crate) fn relocate_project_paths(&self, paths: &[(String, String)]) -> Result<()> {
         let tx = self.begin()?;
         for (old, new) in paths {
-            tx.execute(
-                "UPDATE local_projects SET repo_path = ?2 WHERE repo_path = ?1",
-                params![old, new],
-            )?;
+            for column in ["repo_path", "project_dir"] {
+                tx.execute(
+                    &format!("UPDATE local_projects SET {column} = ?2 WHERE {column} = ?1"),
+                    params![old, new],
+                )?;
+            }
         }
         tx.commit()?;
         Ok(())
@@ -413,6 +419,11 @@ impl Store {
         let conn = Connection::open(dir.join("orx.db"))?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "busy_timeout", 5000)?;
+        // `team_papers` and `prompt_gists` are declared ON DELETE CASCADE, so
+        // deleting a project must drop its dependents. Enforcement is off per
+        // connection unless asked for; the bundled SQLite happens to default it
+        // on, which we do not want to depend on.
+        conn.pragma_update(None, "foreign_keys", true)?;
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS runs (
                 id           TEXT PRIMARY KEY,
@@ -5393,6 +5404,52 @@ mod tests {
             created_at: 1,
             updated_at: 1,
         }
+    }
+
+    /// The schema declares `ON DELETE CASCADE` on both project-scoped tables, so
+    /// enforcement has to be on for the connection that runs the delete.
+    #[test]
+    fn deleting_a_project_drops_its_gists_and_papers_but_keeps_global_gists() {
+        let dir = std::env::temp_dir().join(format!(
+            "orx-store-project-delete-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let store = Store::open_at(dir.clone()).unwrap();
+        store
+            .create_local_project(&LocalProject {
+                id: "proj_1".into(),
+                name: "Project".into(),
+                slug: "project".into(),
+                github_owner: String::new(),
+                github_repo: String::new(),
+                github_sync_enabled: false,
+                baseline_branch: "main".into(),
+                repo_path: dir.join("project").to_string_lossy().into_owned(),
+                project_dir: dir.join("project").to_string_lossy().into_owned(),
+                run_command: None,
+                paper_id: None,
+                created_at: 1,
+                updated_at: 1,
+            })
+            .unwrap();
+        store
+            .create_team_paper(&team_paper_fixture("tp_1", "a.pdf"))
+            .unwrap();
+        store
+            .create_prompt_gist(&prompt_gist_fixture("g1", None))
+            .unwrap();
+        store
+            .create_prompt_gist(&prompt_gist_fixture("g2", Some("proj_1")))
+            .unwrap();
+
+        store.delete_local_project("proj_1").unwrap();
+
+        assert!(store.get_local_project("proj_1").unwrap().is_none());
+        assert!(store.get_team_paper("tp_1").unwrap().is_none());
+        assert!(store.get_prompt_gist("g2").unwrap().is_none());
+        assert!(store.get_prompt_gist("g1").unwrap().is_some());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

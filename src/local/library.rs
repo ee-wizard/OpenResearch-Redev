@@ -131,27 +131,49 @@ pub fn supervisor_skills_dir() -> PathBuf {
     library_dir().join("skills").join(".supervisor")
 }
 
+/// Directory holding the cloned skill packages. The Supervisor-Skills repository
+/// keeps them one level down in `skills/`; a flat layout is honoured too, so an
+/// upstream reorganisation cannot silently empty the listing.
+fn supervisor_skills_base() -> PathBuf {
+    supervisor_skills_base_in(&supervisor_skills_dir())
+}
+
+fn supervisor_skills_base_in(root: &Path) -> PathBuf {
+    let nested = root.join("skills");
+    if nested.is_dir() {
+        nested
+    } else {
+        root.to_path_buf()
+    }
+}
+
+/// Whether `path` holds a repository, i.e. a clone we can pull into. Checks the
+/// metadata on disk rather than spawning git, so a missing git binary can never
+/// make an intact clone look disposable.
+fn is_clone(path: &Path) -> bool {
+    path.join(".git").exists()
+}
+
 /// Clone or pull the Supervisor-Skills repository so its skill packages are
 /// available as a deletable built-in source. Returns an error when git is
 /// unavailable or the network/SSH operation fails; callers decide whether to
 /// treat this as fatal.
 pub fn ensure_supervisor_skills() -> Result<()> {
     let path = supervisor_skills_dir();
-    if !path.exists() {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let status = std::process::Command::new("git")
-            .env("GIT_TERMINAL_PROMPT", "0")
-            .env("GIT_SSH_COMMAND", "ssh -o BatchMode=yes")
-            .args(["clone", "--depth", "1", SUPERVISOR_SKILLS_URL])
-            .arg(&path)
-            .status()
-            .map_err(|e| anyhow!("Failed to spawn git clone for supervisor skills: {e}"))?;
-        if !status.success() {
-            return Err(anyhow!("git clone failed for supervisor skills: {status}"));
-        }
-    } else {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    // A clone that died before Git wrote the repository metadata leaves a tree
+    // that `git pull` can never repair, so start over rather than error forever.
+    if path.exists() && !is_clone(&path) {
+        std::fs::remove_dir_all(&path).map_err(|e| {
+            anyhow!(
+                "Could not clear the incomplete supervisor skills clone at {}: {e}",
+                path.display()
+            )
+        })?;
+    }
+    if path.exists() {
         let status = std::process::Command::new("git")
             .current_dir(&path)
             .env("GIT_TERMINAL_PROMPT", "0")
@@ -161,6 +183,32 @@ pub fn ensure_supervisor_skills() -> Result<()> {
             .map_err(|e| anyhow!("Failed to spawn git pull for supervisor skills: {e}"))?;
         if !status.success() {
             return Err(anyhow!("git pull failed for supervisor skills: {status}"));
+        }
+        return Ok(());
+    }
+    // Clone beside the library and rename into place: the skills directory then
+    // appears atomically, so a reader never lists the half-checked-out tree.
+    let staging = library_dir().join(format!(".supervisor-clone-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&staging);
+    let status = std::process::Command::new("git")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_SSH_COMMAND", "ssh -o BatchMode=yes")
+        .args(["clone", "--depth", "1", SUPERVISOR_SKILLS_URL])
+        .arg(&staging)
+        .status()
+        .map_err(|e| anyhow!("Failed to spawn git clone for supervisor skills: {e}"))?;
+    if !status.success() {
+        let _ = std::fs::remove_dir_all(&staging);
+        return Err(anyhow!("git clone failed for supervisor skills: {status}"));
+    }
+    if let Err(error) = std::fs::rename(&staging, &path) {
+        let _ = std::fs::remove_dir_all(&staging);
+        // Another process installed its own clone first; ours is redundant.
+        if !path.exists() {
+            return Err(anyhow!(
+                "Could not install the supervisor skills clone at {}: {error}",
+                path.display()
+            ));
         }
     }
     Ok(())
@@ -221,7 +269,7 @@ pub fn write_library_content(
             library_dir().join("skills").join("team").join(id).join("SKILL.md")
         }
         (LibraryKind::Skill, LibrarySource::Supervisor) => {
-            supervisor_skills_dir().join(id).join("SKILL.md")
+            supervisor_skills_base().join(id).join("SKILL.md")
         }
         (LibraryKind::Agent, LibrarySource::BuiltIn) => {
             library_dir().join("agents").join(id).join("shim.md")
@@ -288,7 +336,7 @@ pub fn delete_library_item(kind: LibraryKind, id: &str, source: LibrarySource) -
         (LibraryKind::Skill, LibrarySource::Team) => {
             library_dir().join("skills").join("team").join(id)
         }
-        (LibraryKind::Skill, LibrarySource::Supervisor) => supervisor_skills_dir().join(id),
+        (LibraryKind::Skill, LibrarySource::Supervisor) => supervisor_skills_base().join(id),
         (LibraryKind::Agent, LibrarySource::Team) => library_dir().join("agents").join(id),
         _ => return Err(anyhow!("Cannot delete {source:?} {kind}")),
     };
@@ -354,12 +402,15 @@ fn list_skills(source: LibrarySource) -> Result<Vec<LibraryItem>> {
 }
 
 fn list_supervisor_skills() -> Result<Vec<LibraryItem>> {
-    let base = supervisor_skills_dir();
+    list_supervisor_skills_in(&supervisor_skills_base())
+}
+
+fn list_supervisor_skills_in(base: &Path) -> Result<Vec<LibraryItem>> {
     let mut items = Vec::new();
     if !base.exists() {
         return Ok(items);
     }
-    for entry in std::fs::read_dir(&base)? {
+    for entry in std::fs::read_dir(base)? {
         let entry = entry?;
         let path = entry.path();
         if !path.is_dir() {
@@ -494,7 +545,7 @@ fn get_skill_item(id: &str, source: LibrarySource) -> Result<Option<LibraryItem>
             .join(id)
             .join("SKILL.md"),
         LibrarySource::Project => return Ok(None),
-        LibrarySource::Supervisor => supervisor_skills_dir().join(id).join("SKILL.md"),
+        LibrarySource::Supervisor => supervisor_skills_base().join(id).join("SKILL.md"),
     };
     if !path.exists() {
         return Ok(None);
@@ -630,10 +681,16 @@ pub fn builtin_skill_source_dir(name: &str) -> Option<PathBuf> {
 mod tests {
     use super::*;
 
-    struct TmpDataDir(std::path::PathBuf);
+    struct TmpDataDir(std::path::PathBuf, std::sync::MutexGuard<'static, ()>);
+
+    /// `library_dir()` reads `$ORX_DATA_DIR` fresh on every call, so only one of
+    /// these may exist at a time: a sibling's `Drop` would otherwise unset the
+    /// variable mid-test and send the other test into the real data dir.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     impl TmpDataDir {
         fn new() -> Self {
+            let guard = ENV_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
             let path = std::env::temp_dir().join(format!(
                 "orx-library-test-{}-{}",
                 std::process::id(),
@@ -644,7 +701,7 @@ mod tests {
             ));
             std::fs::create_dir_all(&path).unwrap();
             std::env::set_var("ORX_DATA_DIR", &path);
-            Self(path)
+            Self(path, guard)
         }
     }
 
@@ -707,5 +764,40 @@ mod tests {
         assert!(content.contains("body"));
         let items = list_library_items(Some(LibraryKind::Skill), LibrarySource::Team).unwrap();
         assert!(items.iter().any(|i| i.id == "my-skill"));
+    }
+
+    /// The Supervisor-Skills repository keeps its packages under `skills/`, so a
+    /// listing that only looked at the clone root came back empty and no
+    /// supervisor skill could be read or edited.
+    #[test]
+    fn supervisor_skills_are_listed_from_the_clones_skills_dir() {
+        let root = std::env::temp_dir().join(format!("orx-supervisor-{}", uuid::Uuid::new_v4()));
+        let deep_research = root.join("skills/deep-research");
+        std::fs::create_dir_all(&deep_research).unwrap();
+        std::fs::write(
+            deep_research.join("SKILL.md"),
+            "---\nname: Deep Research\ndescription: d\n---\nbody\n",
+        )
+        .unwrap();
+
+        let base = supervisor_skills_base_in(&root);
+        assert_eq!(base, root.join("skills"));
+
+        let items = list_supervisor_skills_in(&base).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].id, "deep-research");
+        assert_eq!(items[0].name, "Deep Research");
+        assert!(std::fs::read_to_string(&items[0].file_path)
+            .unwrap()
+            .contains("body"));
+
+        // A clone that already keeps skills at its root still lists them.
+        let flat = root.join("flat");
+        std::fs::create_dir_all(flat.join("flat-skill")).unwrap();
+        std::fs::write(flat.join("flat-skill/SKILL.md"), "---\nname: Flat\n---\n").unwrap();
+        assert_eq!(supervisor_skills_base_in(&flat), flat);
+        assert_eq!(list_supervisor_skills_in(&flat).unwrap().len(), 1);
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
