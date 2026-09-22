@@ -46,6 +46,7 @@ import {
   type ContentTab,
   type PromptGistsTabDef,
   type HandbookTabDef,
+  type TeamPapersTabDef,
   rightTabKey,
   withoutTab,
   isPresent,
@@ -69,6 +70,7 @@ import {
   ChartSpline,
   Check,
   FileCode,
+  FileText,
   Filter,
   FlaskConical,
   FolderGit2,
@@ -110,6 +112,7 @@ import { ArtifactsTab, findArtifactEntry } from "./components/ArtifactsTab";
 import { LibraryTab } from "./components/SkillsTab";
 import { PromptGistsTab } from "./components/PromptGistsTab";
 import { HandbookTab } from "./components/HandbookTab";
+import { TeamPapersTab } from "./components/TeamPapersTab";
 import { ClosableTab } from "./components/ClosableTab";
 import { DetailDrawer, type ExperimentView } from "./components/DetailDrawer";
 import { FileViewer, type FileScrollPosition } from "./components/FileViewer";
@@ -389,6 +392,7 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
   const [terminalTabOpen, setTerminalTabOpen] = useState(false);
   const [promptGistsTabOpen, setPromptGistsTabOpen] = useState(false);
   const [handbookTabOpen, setHandbookTabOpen] = useState(false);
+  const [teamPapersTabOpen, setTeamPapersTabOpen] = useState(false);
   // Which checkout has a live shell; a restored-but-unselected tab spawns nothing until selected.
   const [terminalStartedFor, setTerminalStartedFor] = useState<string | null>(null);
   const [expTabs, setExpTabs] = useState<ExpViewDef[]>([]);
@@ -594,6 +598,7 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
     terminalTabOpen,
     promptGistsTabOpen,
     handbookTabOpen,
+    teamPapersTabOpen,
     expTabs,
     fileTabs,
     planTabs,
@@ -608,7 +613,7 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
     panelOpen,
     panelMax,
     treeViewport,
-  }), [rightTab, tabHistory, experimentsTabOpen, filesTabOpen, artifactsTabOpen, terminalTabOpen, expTabs, fileTabs, planTabs, subagentTabs, codeTabs, contentTabOrder, previewTab, filesView, filesToggled, selectedRunId, scope, panelOpen, panelMax, treeViewport]);
+  }), [rightTab, tabHistory, experimentsTabOpen, filesTabOpen, artifactsTabOpen, terminalTabOpen, teamPapersTabOpen, expTabs, fileTabs, planTabs, subagentTabs, codeTabs, contentTabOrder, previewTab, filesView, filesToggled, selectedRunId, scope, panelOpen, panelMax, treeViewport]);
   currentRightPaneStateRef.current = rightPaneState;
   const getFileScroll = useCallback(() => Object.fromEntries(fileScrollPositionsRef.current), []);
   const scrollSaveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -626,6 +631,7 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
     setTerminalTabOpen(state.terminalTabOpen);
     setPromptGistsTabOpen(state.promptGistsTabOpen);
     setHandbookTabOpen(state.handbookTabOpen);
+    setTeamPapersTabOpen(state.teamPapersTabOpen);
     setExpTabs(state.expTabs);
     setFileTabs(state.fileTabs);
     setPlanTabs((current) => current === state.planTabs ? current : state.planTabs.map((tab) => ({ ...tab, plan: current.find((item) => item.sessionId === tab.sessionId && item.promptId === tab.promptId)?.plan ?? "" })));
@@ -890,6 +896,11 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
   const openHandbookTab = useCallback(() => {
     setHandbookTabOpen(true);
     selectRightTab("handbook");
+  }, [selectRightTab]);
+
+  const openTeamPapersTab = useCallback(() => {
+    setTeamPapersTabOpen(true);
+    selectRightTab("teamPapers");
   }, [selectRightTab]);
   const terminalKey = activeSessionId ?? (projectId ? `project:${projectId}` : null);
   useEffect(() => {
@@ -1343,7 +1354,7 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
   }, [selectRightTab]);
 
   const closeHomeTab = useCallback(
-    (tab: "experiments" | "files" | "artifacts" | "terminal" | PromptGistsTabDef | HandbookTabDef) => {
+    (tab: "experiments" | "files" | "artifacts" | "terminal" | PromptGistsTabDef | HandbookTabDef | TeamPapersTabDef) => {
       if (tab === "experiments") setExperimentsTabOpen(false);
       else if (tab === "files") setFilesTabOpen(false);
       else if (tab === "terminal") {
@@ -1352,6 +1363,7 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
       }
       else if (tab === "promptGists") setPromptGistsTabOpen(false);
       else if (tab === "handbook") setHandbookTabOpen(false);
+      else if (tab === "teamPapers") setTeamPapersTabOpen(false);
       else setArtifactsTabOpen(false);
       forgetRightTab(tab, rightTab === tab);
     },
@@ -1643,6 +1655,8 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
             promptGistsActive={rightTab === "promptGists"}
             onOpenHandbook={openHandbookTab}
             handbookActive={rightTab === "handbook"}
+            onOpenTeamPapers={openTeamPapersTab}
+            teamPapersActive={rightTab === "teamPapers"}
           >
             {mainView === "skills" ? (
               <LibraryTab />
@@ -1744,6 +1758,15 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
                     icon={<Book size={12} className="shrink-0" />}
                     onSelect={() => selectRightTab("handbook")}
                     onClose={() => closeHomeTab("handbook")}
+                  />
+                )}
+                {teamPapersTabOpen && (
+                  <ClosableTab
+                    active={rightTab === "teamPapers"}
+                    label={m.team_papers_title()}
+                    icon={<FileText size={12} className="shrink-0" />}
+                    onSelect={() => selectRightTab("teamPapers")}
+                    onClose={() => closeHomeTab("teamPapers")}
                   />
                 )}
                 {orderedContentTabs.map(renderContentTab)}
@@ -1915,6 +1938,10 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
             ) : rightTab === "handbook" ? (
               <TabBody className="p-0">
                 <HandbookTab />
+              </TabBody>
+            ) : rightTab === "teamPapers" ? (
+              <TabBody>
+                {activeProject && <TeamPapersTab projectId={activeProject.id} />}
               </TabBody>
             ) : rightTab === "files" ? (
               <TabBody>

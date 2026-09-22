@@ -25,6 +25,7 @@ export function paneTab(pane: Pane): RightTab {
     case "subagent": return { kind: "subagent", sessionId: pane.sessionId, spawnPartId: pane.spawnPartId };
     case "promptGists": return "promptGists";
     case "handbook": return "handbook";
+    case "teamPapers": return "teamPapers";
   }
 }
 
@@ -36,6 +37,7 @@ export function rememberWorkspace(state: RightPaneSessionState, scroll: TaskWork
   if (state.experimentsTabOpen) home.push("experiments");
   if (state.promptGistsTabOpen) home.push("promptGists");
   if (state.handbookTabOpen) home.push("handbook");
+  if (state.teamPapersTabOpen) home.push("teamPapers");
   const content = [...state.expTabs, ...state.fileTabs, ...state.planTabs, ...state.subagentTabs, ...state.codeTabs];
   const byKey = new Map(content.map((tab) => [rightTabKey(tab), tab]));
   const ordered = state.contentTabOrder.flatMap((key) => { const tab = byKey.get(key); return tab ? [tab] : []; });
@@ -73,6 +75,7 @@ export function restoreWorkspace(saved: TaskWorkspace | undefined, pane: Pane | 
       if (tab === "terminal") state.terminalTabOpen = true;
       if (tab === "promptGists") state.promptGistsTabOpen = true;
       if (tab === "handbook") state.handbookTabOpen = true;
+      if (tab === "teamPapers") state.teamPapersTabOpen = true;
       continue;
     }
     if ("code" in tab) { tab.toggled = new Set(saved?.expanded[rightTabKey(tab)] ?? []); state.codeTabs.push(tab); }
@@ -191,6 +194,7 @@ export const sameCodeTab = (a: CodeTabDef, b: CodeTabDef) => a.branch === b.bran
 
 export type PromptGistsTabDef = "promptGists";
 export type HandbookTabDef = "handbook";
+export type TeamPapersTabDef = "teamPapers";
 
 export type RightTab =
   | "experiments"
@@ -199,6 +203,7 @@ export type RightTab =
   | "terminal"
   | PromptGistsTabDef
   | HandbookTabDef
+  | TeamPapersTabDef
   | ExpViewDef
   | FileViewDef
   | PlanViewDef
@@ -237,6 +242,7 @@ export interface RightPaneSessionState {
   terminalTabOpen: boolean;
   promptGistsTabOpen: boolean;
   handbookTabOpen: boolean;
+  teamPapersTabOpen: boolean;
   expTabs: ExpViewDef[];
   fileTabs: FileViewDef[];
   planTabs: PlanViewDef[];
@@ -268,6 +274,7 @@ export function initialRightPaneSessionState(
     terminalTabOpen: false,
     promptGistsTabOpen: false,
     handbookTabOpen: false,
+    teamPapersTabOpen: false,
     expTabs: [],
     fileTabs: [],
     planTabs: [],

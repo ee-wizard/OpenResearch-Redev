@@ -1,12 +1,13 @@
 export type Pane =
-  | { kind: "home"; view: "experiments" | "files" | "artifacts" | "terminal" | "promptGists" | "handbook" }
+  | { kind: "home"; view: "experiments" | "files" | "artifacts" | "terminal" | "promptGists" | "handbook" | "teamPapers" }
   | { kind: "experiment"; experimentId: string; view: "overview" | "terminal"; runId?: string }
   | { kind: "file"; path: string; source?: "repo" | "artifacts" | "abs"; sessionId?: string; ref?: string; line?: number; branchLabel?: string }
   | { kind: "code"; experimentId: string; branch: string; view: "files" | "changes" }
   | { kind: "plan"; sessionId: string; promptId: string }
   | { kind: "subagent"; sessionId: string; spawnPartId: string }
   | { kind: "promptGists" }
-  | { kind: "handbook" };
+  | { kind: "handbook" }
+  | { kind: "teamPapers" };
 
 export interface TaskWorkspace {
   tabs: Pane[];
@@ -56,7 +57,7 @@ export function parsePane(value: unknown): Pane | undefined {
   const only = (...fields: string[]) => Object.keys(value).every((field) => fields.includes(field));
   switch (value.kind) {
     case "home":
-      if (only("kind", "view") && (value.view === "experiments" || value.view === "files" || value.view === "artifacts" || value.view === "terminal" || value.view === "promptGists" || value.view === "handbook"))
+      if (only("kind", "view") && (value.view === "experiments" || value.view === "files" || value.view === "artifacts" || value.view === "terminal" || value.view === "promptGists" || value.view === "handbook" || value.view === "teamPapers"))
         return { kind: "home", view: value.view };
       break;
     case "experiment":
@@ -86,6 +87,10 @@ export function parsePane(value: unknown): Pane | undefined {
       break;
     case "handbook":
       if (only("kind")) return { kind: "handbook" };
+      break;
+    case "teamPapers":
+      if (only("kind")) return { kind: "teamPapers" };
+      break;
   }
 }
 

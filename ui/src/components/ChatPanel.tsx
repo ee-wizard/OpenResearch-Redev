@@ -4262,6 +4262,8 @@ export function ChatPanel({
   promptGistsActive = false,
   onOpenHandbook,
   handbookActive = false,
+  onOpenTeamPapers,
+  teamPapersActive = false,
   children,
 }: {
   projectId: string;
@@ -4330,6 +4332,10 @@ export function ChatPanel({
   onOpenHandbook?: () => void;
   /** Whether the Handbook right-panel tab is currently active. */
   handbookActive?: boolean;
+  /** Open the Team Papers tab in the right pane. */
+  onOpenTeamPapers?: () => void;
+  /** Whether the Team Papers right-panel tab is currently active. */
+  teamPapersActive?: boolean;
   /** Middle-pane content when a settings section is active. */
   children?: React.ReactNode;
 }) {
@@ -5882,6 +5888,15 @@ export function ChatPanel({
           >
             <Book size={15} />
             {m.handbook_title()}
+          </button>
+        )}
+        {onOpenTeamPapers && (
+          <button
+            className={`rail-nav-item flex items-center gap-2.5 py-[7px] px-2.5 text-base text-text rounded-md text-start [&:hover:not(.active)]:bg-surface [&.active]:bg-panel [&.active]:font-medium ${teamPapersActive ? "active" : ""}`}
+            onClick={onOpenTeamPapers}
+          >
+            <FileText size={15} />
+            {m.team_papers_title()}
           </button>
         )}
         {SETTINGS_NAV.map((item) => (

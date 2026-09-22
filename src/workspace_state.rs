@@ -102,6 +102,7 @@ pub enum Pane {
     /// so a URL carrying either form must survive a round trip through here.
     PromptGists,
     Handbook,
+    TeamPapers,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
@@ -113,6 +114,7 @@ pub enum HomeView {
     Terminal,
     PromptGists,
     Handbook,
+    TeamPapers,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
@@ -155,7 +157,7 @@ impl Pane {
     fn valid(&self) -> bool {
         let nonempty = |value: &String| !value.is_empty();
         match self {
-            Self::Home { .. } | Self::PromptGists | Self::Handbook => true,
+            Self::Home { .. } | Self::PromptGists | Self::Handbook | Self::TeamPapers => true,
             Self::Experiment {
                 experiment_id,
                 run_id,

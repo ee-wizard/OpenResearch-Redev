@@ -357,7 +357,10 @@ pub fn ensure_playbook(
     let (prompt_gists_line, team_papers_line) = match store::Store::open() {
         Ok(store) => (
             prompt_gists_line(project, &store),
-            super::team_papers::playbook_line(project, &workdir, &store).unwrap_or_default(),
+            super::team_papers::playbook_line(project, &workdir, &store).unwrap_or_else(|err| {
+                eprintln!("warning: could not build the team papers playbook line: {err}");
+                String::new()
+            }),
         ),
         Err(_) => (String::new(), String::new()),
     };

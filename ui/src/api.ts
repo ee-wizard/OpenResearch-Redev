@@ -1787,6 +1787,83 @@ export const deletePromptGist = (id: string, projectId?: string) =>
     method: "DELETE",
   }).then((r) => json<{ ok: boolean }>(r));
 
+// --- team papers ------------------------------------------------------------
+
+/** A PDF a project member shared with the agent. Mirrors the Rust `TeamPaper`
+ * wire shape: `Option` fields serialize as `null`. */
+export interface TeamPaper {
+  id: string;
+  projectId: string;
+  filename: string;
+  title: string | null;
+  authors: string[];
+  tags: string[];
+  notes: string | null;
+  sourceUrl: string | null;
+  pageCount: number | null;
+  extractedAt: number | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+const teamPapersPath = (projectId: string) =>
+  `/api/projects/${encodeURIComponent(projectId)}/team-papers`;
+
+const teamPaperPath = (projectId: string, paperId: string) =>
+  `${teamPapersPath(projectId)}/${encodeURIComponent(paperId)}`;
+
+export const listTeamPapers = (projectId: string, signal?: AbortSignal) =>
+  get<{ papers: TeamPaper[] }>(teamPapersPath(projectId), signal).then((r) => r.papers);
+
+/** Upload a PDF. `contentBase64` is the raw file bytes; the backend extracts
+ * text best-effort, so a missing `pdftotext` still stores the paper. */
+export const uploadTeamPaper = (req: {
+  projectId: string;
+  filename: string;
+  contentBase64: string;
+  title?: string;
+  authors?: string[];
+  tags?: string[];
+  notes?: string;
+  sourceUrl?: string;
+}) =>
+  post<{ paper: TeamPaper }>(teamPapersPath(req.projectId), {
+    filename: req.filename,
+    contentBase64: req.contentBase64,
+    title: req.title,
+    authors: req.authors,
+    tags: req.tags,
+    notes: req.notes,
+    sourceUrl: req.sourceUrl,
+  }).then((r) => r.paper);
+
+/** Update metadata. `null` clears an optional text field; `undefined` (omitted)
+ * leaves it unchanged. */
+export const updateTeamPaper = (req: {
+  projectId: string;
+  id: string;
+  title?: string | null;
+  authors?: string[];
+  tags?: string[];
+  notes?: string | null;
+  sourceUrl?: string | null;
+}) =>
+  patch<{ paper: TeamPaper }>(teamPaperPath(req.projectId, req.id), {
+    title: req.title,
+    authors: req.authors,
+    tags: req.tags,
+    notes: req.notes,
+    sourceUrl: req.sourceUrl,
+  }).then((r) => r.paper);
+
+export const deleteTeamPaper = (projectId: string, paperId: string) =>
+  writeResponse(teamPaperPath(projectId, paperId), { method: "DELETE" }).then((r) =>
+    json<{ ok: boolean }>(r),
+  );
+
+export const getTeamPaperText = (projectId: string, paperId: string, signal?: AbortSignal) =>
+  get<{ text: string }>(`${teamPaperPath(projectId, paperId)}/text`, signal).then((r) => r.text);
+
 // --- team library ------------------------------------------------------------
 
 export type LibraryKind = "skill" | "agent";
