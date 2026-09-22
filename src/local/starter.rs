@@ -390,7 +390,7 @@ fn clip(text: &str, chars: usize) -> String {
 /// order (the fingerprint depends on it).
 fn brief(project: &LocalProject, files: &[String]) -> String {
     let team_paper_count = crate::store::Store::open()
-        .and_then(|s| s.list_team_papers(&project.id))
+        .and_then(|s| s.list_team_papers(Some(&project.id)))
         .map(|papers| papers.len())
         .unwrap_or(0);
     brief_parts(

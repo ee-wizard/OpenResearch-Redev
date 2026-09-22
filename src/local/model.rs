@@ -120,7 +120,8 @@ impl LocalExperiment {
 #[serde(rename_all = "camelCase")]
 pub struct TeamPaper {
     pub id: String,
-    pub project_id: String,
+    /// NULL = team-wide (global) paper, usable with no project.
+    pub project_id: Option<String>,
     pub filename: String,
     pub title: Option<String>,
     pub authors: Vec<String>,

@@ -351,17 +351,22 @@ pub fn ensure_playbook(
         std::fs::create_dir_all(parent)
             .map_err(|e| anyhow!("Could not create {}: {}", parent.display(), e))?;
     }
-    // Make team papers reachable from the session worktree when necessary.
-    super::team_papers::stage_into_worktree(project, &workdir)?;
     let project_state = ProjectState::load(&project.id)?;
     let (prompt_gists_line, team_papers_line) = match store::Store::open() {
-        Ok(store) => (
-            prompt_gists_line(project, &store),
-            super::team_papers::playbook_line(project, &workdir, &store).unwrap_or_else(|err| {
-                eprintln!("warning: could not build the team papers playbook line: {err}");
-                String::new()
-            }),
-        ),
+        Ok(store) => {
+            // Staged after the store opens so global papers (resolved against
+            // its data dir) are reachable at the playbook paths too.
+            super::team_papers::stage_into_worktree(&store, project, &workdir)?;
+            (
+                prompt_gists_line(project, &store),
+                super::team_papers::playbook_line(project, &workdir, &store).unwrap_or_else(
+                    |err| {
+                        eprintln!("warning: could not build the team papers playbook line: {err}");
+                        String::new()
+                    },
+                ),
+            )
+        }
         Err(_) => (String::new(), String::new()),
     };
     std::fs::write(

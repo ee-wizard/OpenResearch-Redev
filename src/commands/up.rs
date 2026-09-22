@@ -683,6 +683,20 @@ fn router(state: AppState, remote_auth: Option<RemoteAuth>) -> Router {
             get(get_team_paper_text),
         )
         .route(
+            "/api/team-papers",
+            get(list_global_team_papers).post(create_global_team_paper),
+        )
+        .route(
+            "/api/team-papers/{paperId}",
+            get(get_global_team_paper)
+                .patch(update_global_team_paper)
+                .delete(delete_global_team_paper),
+        )
+        .route(
+            "/api/team-papers/{paperId}/text",
+            get(get_global_team_paper_text),
+        )
+        .route(
             "/api/prompt-gists",
             get(list_prompt_gists).post(create_prompt_gist),
         )
@@ -2373,12 +2387,33 @@ async fn list_experiments(Path(id): Path<String>) -> ApiResult {
     Ok(Json(json!({ "experiments": experiments })))
 }
 
+/// A project view sees its own papers plus the global (team-wide) ones; a paper
+/// owned by another project stays invisible and 404s.
+fn paper_visible_in_project(paper: &local::model::TeamPaper, project_id: &str) -> bool {
+    paper
+        .project_id
+        .as_deref()
+        .is_none_or(|pid| pid == project_id)
+}
+
+/// Load a paper for a project-scoped route, applying the visibility rule above.
+fn project_team_paper(
+    store: &Store,
+    project_id: &str,
+    paper_id: &str,
+) -> std::result::Result<local::model::TeamPaper, ApiError> {
+    store
+        .get_team_paper(paper_id)?
+        .filter(|p| paper_visible_in_project(p, project_id))
+        .ok_or_else(|| not_found("paper"))
+}
+
 async fn list_team_papers(Path(id): Path<String>) -> ApiResult {
     let store = Store::open()?;
     store
         .get_local_project(&id)?
         .ok_or_else(|| not_found("project"))?;
-    let papers = store.list_team_papers(&id)?;
+    let papers = store.list_team_papers(Some(&id))?;
     Ok(Json(json!({ "papers": papers })))
 }
 
@@ -2390,11 +2425,12 @@ async fn create_team_paper(
     let project = store
         .get_local_project(&id)?
         .ok_or_else(|| not_found("project"))?;
-    let paper =
-        tokio::task::spawn_blocking(move || team_papers::save_team_paper(&store, &project, req))
-            .await
-            .map_err(|e| ApiError::from(anyhow!("team paper task failed: {e}")))?
-            .map_err(bad_request)?;
+    let paper = tokio::task::spawn_blocking(move || {
+        team_papers::save_team_paper(&store, team_papers::PaperScope::Project(&project), req)
+    })
+    .await
+    .map_err(|e| ApiError::from(anyhow!("team paper task failed: {e}")))?
+    .map_err(bad_request)?;
     Ok(Json(json!({ "paper": paper })))
 }
 
@@ -2407,10 +2443,7 @@ async fn get_team_paper(Path((id, paper_id)): Path<(String, String)>) -> ApiResu
     store
         .get_local_project(&id)?
         .ok_or_else(|| not_found("project"))?;
-    let paper = store
-        .get_team_paper(&paper_id)?
-        .filter(|p| p.project_id == id)
-        .ok_or_else(|| not_found("paper"))?;
+    let paper = project_team_paper(&store, &id, &paper_id)?;
     Ok(Json(json!({ "paper": team_paper_json(&paper) })))
 }
 
@@ -2429,19 +2462,12 @@ struct UpdateTeamPaperReq {
     page_count: Option<i64>,
 }
 
-async fn update_team_paper(
-    Path((id, paper_id)): Path<(String, String)>,
-    Json(req): Json<UpdateTeamPaperReq>,
-) -> ApiResult {
-    let store = Store::open()?;
-    store
-        .get_local_project(&id)?
-        .ok_or_else(|| not_found("project"))?;
-    let mut paper = store
-        .get_team_paper(&paper_id)?
-        .filter(|p| p.project_id == id)
-        .ok_or_else(|| not_found("paper"))?;
-
+/// Apply a PATCH body to a paper in place. Shared by the project and global
+/// routes, which differ only in how the paper is resolved.
+fn apply_team_paper_update(
+    paper: &mut local::model::TeamPaper,
+    req: UpdateTeamPaperReq,
+) -> std::result::Result<(), ApiError> {
     if let Some(filename) = req.filename {
         let filename = filename.trim().to_string();
         if filename.is_empty() {
@@ -2467,7 +2493,19 @@ async fn update_team_paper(
     if let Some(page_count) = req.page_count {
         paper.page_count = Some(page_count);
     }
+    Ok(())
+}
 
+async fn update_team_paper(
+    Path((id, paper_id)): Path<(String, String)>,
+    Json(req): Json<UpdateTeamPaperReq>,
+) -> ApiResult {
+    let store = Store::open()?;
+    store
+        .get_local_project(&id)?
+        .ok_or_else(|| not_found("project"))?;
+    let mut paper = project_team_paper(&store, &id, &paper_id)?;
+    apply_team_paper_update(&mut paper, req)?;
     if !store.update_team_paper(&paper)? {
         return Err(not_found("paper"));
     }
@@ -2479,12 +2517,18 @@ async fn delete_team_paper(Path((id, paper_id)): Path<(String, String)>) -> ApiR
     let project = store
         .get_local_project(&id)?
         .ok_or_else(|| not_found("project"))?;
-    store
-        .get_team_paper(&paper_id)?
-        .filter(|p| p.project_id == id)
-        .ok_or_else(|| not_found("paper"))?;
+    let paper = project_team_paper(&store, &id, &paper_id)?;
+    let project_owned = paper.project_id.is_some();
     tokio::task::spawn_blocking(move || {
-        team_papers::delete_team_paper(&store, &project, &paper_id)
+        // The paper's own scope decides where its files live: a global paper is
+        // deleted from the data dir even when a project view asked, never
+        // "adopted" into that project's tree.
+        let scope = if project_owned {
+            team_papers::PaperScope::Project(&project)
+        } else {
+            team_papers::PaperScope::Global
+        };
+        team_papers::delete_team_paper(&store, scope, &paper_id)
     })
     .await
     .map_err(|e| ApiError::from(anyhow!("team paper delete task failed: {e}")))??;
@@ -2496,14 +2540,91 @@ async fn get_team_paper_text(Path((id, paper_id)): Path<(String, String)>) -> Ap
     let project = store
         .get_local_project(&id)?
         .ok_or_else(|| not_found("project"))?;
+    let paper = project_team_paper(&store, &id, &paper_id)?;
+    let project_owned = paper.project_id.is_some();
+    let text = tokio::task::spawn_blocking(move || {
+        let scope = if project_owned {
+            team_papers::PaperScope::Project(&project)
+        } else {
+            team_papers::PaperScope::Global
+        };
+        team_papers::read_text(&store, scope, &paper_id)
+    })
+    .await
+    .map_err(|e| ApiError::from(anyhow!("team paper text task failed: {e}")))?
+    .map_err(bad_request)?;
+    Ok(Json(json!({ "text": text })))
+}
+
+// --- global team papers ---------------------------------------------------
+
+async fn list_global_team_papers() -> ApiResult {
+    let store = Store::open()?;
+    let papers = store.list_team_papers(None)?;
+    Ok(Json(json!({ "papers": papers })))
+}
+
+async fn create_global_team_paper(Json(req): Json<CreateTeamPaperReq>) -> ApiResult {
+    let store = Store::open()?;
+    let paper = tokio::task::spawn_blocking(move || {
+        team_papers::save_team_paper(&store, team_papers::PaperScope::Global, req)
+    })
+    .await
+    .map_err(|e| ApiError::from(anyhow!("team paper task failed: {e}")))?
+    .map_err(bad_request)?;
+    Ok(Json(json!({ "paper": paper })))
+}
+
+/// Load a paper for a global route: only team-wide papers exist there.
+fn global_team_paper(
+    store: &Store,
+    paper_id: &str,
+) -> std::result::Result<local::model::TeamPaper, ApiError> {
     store
-        .get_team_paper(&paper_id)?
-        .filter(|p| p.project_id == id)
-        .ok_or_else(|| not_found("paper"))?;
-    let text = tokio::task::spawn_blocking(move || team_papers::read_text(&project, &paper_id))
-        .await
-        .map_err(|e| ApiError::from(anyhow!("team paper text task failed: {e}")))?
-        .map_err(bad_request)?;
+        .get_team_paper(paper_id)?
+        .filter(|p| p.project_id.is_none())
+        .ok_or_else(|| not_found("paper"))
+}
+
+async fn get_global_team_paper(Path(paper_id): Path<String>) -> ApiResult {
+    let store = Store::open()?;
+    let paper = global_team_paper(&store, &paper_id)?;
+    Ok(Json(json!({ "paper": team_paper_json(&paper) })))
+}
+
+async fn update_global_team_paper(
+    Path(paper_id): Path<String>,
+    Json(req): Json<UpdateTeamPaperReq>,
+) -> ApiResult {
+    let store = Store::open()?;
+    let mut paper = global_team_paper(&store, &paper_id)?;
+    apply_team_paper_update(&mut paper, req)?;
+    if !store.update_team_paper(&paper)? {
+        return Err(not_found("paper"));
+    }
+    Ok(Json(json!({ "paper": team_paper_json(&paper) })))
+}
+
+async fn delete_global_team_paper(Path(paper_id): Path<String>) -> ApiResult {
+    let store = Store::open()?;
+    global_team_paper(&store, &paper_id)?;
+    tokio::task::spawn_blocking(move || {
+        team_papers::delete_team_paper(&store, team_papers::PaperScope::Global, &paper_id)
+    })
+    .await
+    .map_err(|e| ApiError::from(anyhow!("team paper delete task failed: {e}")))??;
+    Ok(Json(json!({ "ok": true })))
+}
+
+async fn get_global_team_paper_text(Path(paper_id): Path<String>) -> ApiResult {
+    let store = Store::open()?;
+    global_team_paper(&store, &paper_id)?;
+    let text = tokio::task::spawn_blocking(move || {
+        team_papers::read_text(&store, team_papers::PaperScope::Global, &paper_id)
+    })
+    .await
+    .map_err(|e| ApiError::from(anyhow!("team paper text task failed: {e}")))?
+    .map_err(bad_request)?;
     Ok(Json(json!({ "text": text })))
 }
 

@@ -376,6 +376,7 @@ const CHAT_SPAWN_CLAIM_TTL_MS: i64 = 60 * 1000;
 
 pub struct Store {
     conn: Connection,
+    data_dir: PathBuf,
     data_dir_move_lock_path: PathBuf,
 }
 
@@ -591,7 +592,7 @@ impl Store {
             );
             CREATE TABLE IF NOT EXISTS team_papers (
                 id          TEXT PRIMARY KEY,
-                project_id  TEXT NOT NULL,
+                project_id  TEXT,
                 filename    TEXT NOT NULL,
                 title       TEXT,
                 authors_json TEXT NOT NULL DEFAULT '[]',
@@ -671,6 +672,55 @@ impl Store {
             "ALTER TABLE chat_messages ADD COLUMN completed_at INTEGER",
         ] {
             let _ = conn.execute(ddl, []);
+        }
+        // `team_papers.project_id` became nullable so a paper can be team-wide
+        // (global) rather than owned by a single project. SQLite cannot drop
+        // NOT NULL in place, so rebuild the table when an older db still has
+        // the old shape. `pragma_table_info` reports the compiled-in
+        // nullability; a new install already created the nullable column above
+        // and skips this.
+        let team_papers_not_null = conn
+            .query_row(
+                "SELECT \"notnull\" FROM pragma_table_info('team_papers') WHERE name = 'project_id'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?
+            .unwrap_or(0);
+        if team_papers_not_null != 0 {
+            // `PRAGMA foreign_keys` is a no-op inside a transaction, so toggle it
+            // outside. `team_papers` has no incoming foreign keys, so nothing
+            // references it while it is dropped and renamed, and the rebuild is
+            // safe either way.
+            conn.pragma_update(None, "foreign_keys", false)?;
+            let tx = conn.unchecked_transaction()?;
+            tx.execute_batch(
+                "CREATE TABLE team_papers_new (
+                    id          TEXT PRIMARY KEY,
+                    project_id  TEXT,
+                    filename    TEXT NOT NULL,
+                    title       TEXT,
+                    authors_json TEXT NOT NULL DEFAULT '[]',
+                    tags_json   TEXT NOT NULL DEFAULT '[]',
+                    notes       TEXT,
+                    source_url  TEXT,
+                    page_count  INTEGER,
+                    extracted_at INTEGER,
+                    created_at  INTEGER NOT NULL,
+                    updated_at  INTEGER NOT NULL,
+                    FOREIGN KEY (project_id) REFERENCES local_projects(id) ON DELETE CASCADE
+                );
+                INSERT INTO team_papers_new
+                    SELECT id, project_id, filename, title, authors_json, tags_json,
+                           notes, source_url, page_count, extracted_at, created_at, updated_at
+                    FROM team_papers;
+                DROP TABLE team_papers;
+                ALTER TABLE team_papers_new RENAME TO team_papers;
+                CREATE INDEX IF NOT EXISTS idx_team_papers_project
+                    ON team_papers(project_id, created_at);",
+            )?;
+            tx.commit()?;
+            conn.pragma_update(None, "foreign_keys", true)?;
         }
         // Legacy tool failures cannot identify the missing dependency, so require one fresh check.
         conn.execute(
@@ -861,8 +911,16 @@ impl Store {
         // it again before it can reach a CLI.
         Ok(Self {
             conn,
+            data_dir: dir,
             data_dir_move_lock_path,
         })
+    }
+
+    /// Root of this store's data dir. Global (project-independent) artifacts —
+    /// team papers, library — live directly under it, so callers resolve them
+    /// against the same directory the store was opened at.
+    pub fn data_dir(&self) -> &std::path::Path {
+        &self.data_dir
     }
 
     /// Short write transaction over this connection; rolls back when dropped
@@ -1862,12 +1920,25 @@ impl Store {
         Ok(p)
     }
 
-    pub fn list_team_papers(&self, project_id: &str) -> Result<Vec<TeamPaper>> {
-        let mut stmt = self.conn.prepare(&format!(
-            "SELECT {TEAM_PAPER_COLS} FROM team_papers WHERE project_id = ?1 ORDER BY created_at ASC"
-        ))?;
-        let rows = stmt.query_map(params![project_id], TeamPaper::from_row)?;
-        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    /// `None` lists only team-wide (global) papers; `Some(project_id)` lists
+    /// that project's own papers plus the global ones every project sees.
+    pub fn list_team_papers(&self, project_id: Option<&str>) -> Result<Vec<TeamPaper>> {
+        if let Some(pid) = project_id {
+            let mut stmt = self.conn.prepare(&format!(
+                "SELECT {TEAM_PAPER_COLS} FROM team_papers \
+                 WHERE project_id = ?1 OR project_id IS NULL \
+                 ORDER BY project_id NULLS LAST, created_at ASC"
+            ))?;
+            let rows = stmt.query_map(params![pid], TeamPaper::from_row)?;
+            Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+        } else {
+            let mut stmt = self.conn.prepare(&format!(
+                "SELECT {TEAM_PAPER_COLS} FROM team_papers WHERE project_id IS NULL \
+                 ORDER BY created_at ASC"
+            ))?;
+            let rows = stmt.query_map([], TeamPaper::from_row)?;
+            Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+        }
     }
 
     pub fn update_team_paper(&self, p: &TeamPaper) -> Result<bool> {
@@ -5290,7 +5361,7 @@ mod tests {
     fn team_paper_fixture(id: &str, filename: &str) -> TeamPaper {
         TeamPaper {
             id: id.into(),
-            project_id: "proj_1".into(),
+            project_id: Some("proj_1".into()),
             filename: filename.into(),
             title: Some("Team Paper".into()),
             authors: vec!["A. Author".into()],
@@ -5302,6 +5373,60 @@ mod tests {
             created_at: 1,
             updated_at: 1,
         }
+    }
+
+    fn global_team_paper_fixture(id: &str, filename: &str) -> TeamPaper {
+        TeamPaper {
+            project_id: None,
+            ..team_paper_fixture(id, filename)
+        }
+    }
+
+    /// Global papers are listed alone by the global view and alongside a
+    /// project's own papers by that project's view.
+    #[test]
+    fn team_papers_support_global_and_project_scoped() {
+        let dir =
+            std::env::temp_dir().join(format!("orx-store-team-paper-{}", uuid::Uuid::new_v4()));
+        let store = Store::open_at(dir.clone()).unwrap();
+        store
+            .create_local_project(&LocalProject {
+                id: "proj_1".into(),
+                name: "Project".into(),
+                slug: "project".into(),
+                github_owner: String::new(),
+                github_repo: String::new(),
+                github_sync_enabled: false,
+                baseline_branch: "main".into(),
+                repo_path: dir.join("project").to_string_lossy().into_owned(),
+                project_dir: dir.join("project").to_string_lossy().into_owned(),
+                run_command: None,
+                paper_id: None,
+                created_at: 1,
+                updated_at: 1,
+            })
+            .unwrap();
+        store
+            .create_team_paper(&global_team_paper_fixture("tp_g", "global.pdf"))
+            .unwrap();
+        store
+            .create_team_paper(&team_paper_fixture("tp_1", "a.pdf"))
+            .unwrap();
+
+        let globals = store.list_team_papers(None).unwrap();
+        assert_eq!(globals.len(), 1);
+        assert_eq!(globals[0].id, "tp_g");
+        assert_eq!(globals[0].project_id, None);
+
+        let project = store.list_team_papers(Some("proj_1")).unwrap();
+        assert_eq!(project.len(), 2);
+
+        // Another project sees the global paper but not proj_1's own.
+        let other = store.list_team_papers(Some("proj_2")).unwrap();
+        assert_eq!(other.len(), 1);
+        assert_eq!(other[0].id, "tp_g");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -5334,9 +5459,9 @@ mod tests {
             .create_team_paper(&team_paper_fixture("tp_2", "b.pdf"))
             .unwrap();
 
-        let papers = store.list_team_papers("proj_1").unwrap();
+        let papers = store.list_team_papers(Some("proj_1")).unwrap();
         assert_eq!(papers.len(), 2);
-        assert_eq!(store.list_team_papers("proj_2").unwrap().len(), 0);
+        assert_eq!(store.list_team_papers(Some("proj_2")).unwrap().len(), 0);
 
         let mut updated = team_paper_fixture("tp_1", "a.pdf");
         updated.title = Some("Renamed".into());
@@ -5354,7 +5479,7 @@ mod tests {
 
         assert!(store.delete_team_paper("tp_1").unwrap());
         assert!(store.get_team_paper("tp_1").unwrap().is_none());
-        assert_eq!(store.list_team_papers("proj_1").unwrap().len(), 1);
+        assert_eq!(store.list_team_papers(Some("proj_1")).unwrap().len(), 1);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -5409,7 +5534,7 @@ mod tests {
     /// The schema declares `ON DELETE CASCADE` on both project-scoped tables, so
     /// enforcement has to be on for the connection that runs the delete.
     #[test]
-    fn deleting_a_project_drops_its_gists_and_papers_but_keeps_global_gists() {
+    fn deleting_a_project_drops_its_gists_and_papers_but_keeps_global_ones() {
         let dir =
             std::env::temp_dir().join(format!("orx-store-project-delete-{}", uuid::Uuid::new_v4()));
         let store = Store::open_at(dir.clone()).unwrap();
@@ -5434,6 +5559,9 @@ mod tests {
             .create_team_paper(&team_paper_fixture("tp_1", "a.pdf"))
             .unwrap();
         store
+            .create_team_paper(&global_team_paper_fixture("tp_g", "global.pdf"))
+            .unwrap();
+        store
             .create_prompt_gist(&prompt_gist_fixture("g1", None))
             .unwrap();
         store
@@ -5444,6 +5572,7 @@ mod tests {
 
         assert!(store.get_local_project("proj_1").unwrap().is_none());
         assert!(store.get_team_paper("tp_1").unwrap().is_none());
+        assert!(store.get_team_paper("tp_g").unwrap().is_some());
         assert!(store.get_prompt_gist("g2").unwrap().is_none());
         assert!(store.get_prompt_gist("g1").unwrap().is_some());
 

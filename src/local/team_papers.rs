@@ -1,8 +1,10 @@
-//! Team papers: PDFs uploaded by project members to shape the research agent's
+//! Team papers: PDFs uploaded by team members to shape the research agent's
 //! context — topic discovery, innovation mining, writing style, and scheme
-//! migration. Files live under `<project_dir>/.openresearch/team-papers/<id>/`
+//! migration. Papers are either global (team-wide, `<data_dir>/team-papers/<id>/`)
+//! or owned by one project (`<project_dir>/.openresearch/team-papers/<id>/`),
 //! with both the original `paper.pdf` and a best-effort `paper.txt` extracted
-//! by the external `pdftotext` tool.
+//! by the external `pdftotext` tool. A project sees the global papers plus its
+//! own.
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -16,6 +18,46 @@ use crate::paths::canonicalize;
 use crate::store::{now_ms, Store};
 
 const TEAM_PAPERS_DIR: &str = ".openresearch/team-papers";
+/// Global papers sit directly under the data dir; project papers under the
+/// project's `.openresearch/` subtree.
+const GLOBAL_TEAM_PAPERS_DIR: &str = "team-papers";
+
+/// Which storage tree a paper lives in. Global papers are team-wide and usable
+/// with no project at all; project papers belong to exactly one project.
+#[derive(Clone, Copy, Debug)]
+pub enum PaperScope<'a> {
+    Global,
+    Project(&'a LocalProject),
+}
+
+impl PaperScope<'_> {
+    /// Storage root for this scope: `<data_dir>/team-papers` for global papers,
+    /// `<project_dir>/.openresearch/team-papers` for a project's own.
+    pub fn dir(&self, store: &Store) -> PathBuf {
+        match self {
+            PaperScope::Global => store.data_dir().join(GLOBAL_TEAM_PAPERS_DIR),
+            PaperScope::Project(project) => Path::new(&project.project_dir).join(TEAM_PAPERS_DIR),
+        }
+    }
+
+    /// The owning project id, or `None` for a global paper.
+    fn project_id(&self) -> Option<String> {
+        match self {
+            PaperScope::Global => None,
+            PaperScope::Project(project) => Some(project.id.clone()),
+        }
+    }
+
+    /// Path to the original PDF for a paper.
+    fn pdf_path(&self, store: &Store, paper_id: &str) -> PathBuf {
+        self.dir(store).join(paper_id).join("paper.pdf")
+    }
+
+    /// Path to the extracted plain text for a paper.
+    fn text_path(&self, store: &Store, paper_id: &str) -> PathBuf {
+        self.dir(store).join(paper_id).join("paper.txt")
+    }
+}
 
 /// A paper id names exactly one directory under the team-papers root. Ids are
 /// minted as UUIDs, but they also arrive from an API path segment (percent-
@@ -29,21 +71,6 @@ fn validate_paper_id(paper_id: &str) -> Result<()> {
         return Err(anyhow!("Invalid paper id: {paper_id}"));
     }
     Ok(())
-}
-
-/// Project-local storage root for team papers.
-pub fn team_papers_dir(project: &LocalProject) -> PathBuf {
-    Path::new(&project.project_dir).join(TEAM_PAPERS_DIR)
-}
-
-/// Path to the original PDF for a paper.
-pub fn paper_pdf_path(project: &LocalProject, paper_id: &str) -> PathBuf {
-    team_papers_dir(project).join(paper_id).join("paper.pdf")
-}
-
-/// Path to the extracted plain text for a paper.
-pub fn paper_text_path(project: &LocalProject, paper_id: &str) -> PathBuf {
-    team_papers_dir(project).join(paper_id).join("paper.txt")
 }
 
 /// Request shape for creating a team paper. Matches the base64 upload convention
@@ -64,7 +91,7 @@ pub struct CreateTeamPaperReq {
 /// row. Extraction failure does not fail the upload.
 pub fn save_team_paper(
     store: &Store,
-    project: &LocalProject,
+    scope: PaperScope<'_>,
     req: CreateTeamPaperReq,
 ) -> Result<TeamPaper> {
     let filename = req.filename.trim().to_string();
@@ -73,7 +100,7 @@ pub fn save_team_paper(
     }
 
     let id = uuid::Uuid::new_v4().to_string();
-    let base_dir = team_papers_dir(project);
+    let base_dir = scope.dir(store);
     let dir = base_dir.join(&id);
 
     std::fs::create_dir_all(&dir)
@@ -109,7 +136,7 @@ pub fn save_team_paper(
 
     let paper = TeamPaper {
         id,
-        project_id: project.id.clone(),
+        project_id: scope.project_id(),
         filename,
         title: req.title.filter(|t| !t.trim().is_empty()),
         authors: req.authors.unwrap_or_default(),
@@ -150,9 +177,10 @@ fn extract_text_with_pdftotext(pdf_path: &Path, text_path: &Path) -> Result<Opti
 
 /// Delete the paper files and the store row. Files are removed first so a
 /// partial failure leaves the row (rather than orphan files).
-pub fn delete_team_paper(store: &Store, project: &LocalProject, paper_id: &str) -> Result<()> {
+pub fn delete_team_paper(store: &Store, scope: PaperScope<'_>, paper_id: &str) -> Result<()> {
     validate_paper_id(paper_id)?;
-    let dir = paper_pdf_path(project, paper_id)
+    let dir = scope
+        .pdf_path(store, paper_id)
         .parent()
         .expect("paper path has a parent directory")
         .to_path_buf();
@@ -167,9 +195,10 @@ pub fn delete_team_paper(store: &Store, project: &LocalProject, paper_id: &str) 
 /// Remove every stored paper file for a project. Used when the project itself
 /// is deleted: the store rows go with it, so the uploaded PDFs and extracted
 /// texts under `<project_dir>/.openresearch/team-papers/` would otherwise stay
-/// behind as unreferenced orphans. Only that orx-owned subtree is touched.
+/// behind as unreferenced orphans. Only that orx-owned subtree is touched;
+/// global papers live elsewhere and are left alone.
 pub fn remove_team_papers_dir(project: &LocalProject) -> Result<()> {
-    let dir = team_papers_dir(project);
+    let dir = Path::new(&project.project_dir).join(TEAM_PAPERS_DIR);
     if dir.exists() {
         std::fs::remove_dir_all(&dir)
             .map_err(|e| anyhow!("Could not remove {}: {}", dir.display(), e))?;
@@ -178,38 +207,47 @@ pub fn remove_team_papers_dir(project: &LocalProject) -> Result<()> {
 }
 
 /// Read the extracted plain text for a paper.
-pub fn read_text(project: &LocalProject, paper_id: &str) -> Result<String> {
+pub fn read_text(store: &Store, scope: PaperScope<'_>, paper_id: &str) -> Result<String> {
     validate_paper_id(paper_id)?;
-    let path = paper_text_path(project, paper_id);
+    let path = scope.text_path(store, paper_id);
     std::fs::read_to_string(&path).map_err(|e| anyhow!("Could not read {}: {}", path.display(), e))
 }
 
-/// Copy the team-papers tree into a session worktree when the worktree is not
-/// already inside the project directory (and therefore cannot reach the files
-/// directly). The destination is already git-ignored via `.openresearch/`.
-/// Returns `true` when files were copied.
-pub fn stage_into_worktree(project: &LocalProject, worktree: &Path) -> Result<bool> {
-    let source = team_papers_dir(project);
-    if !source.exists() {
-        return Ok(false);
-    }
+/// Copy the team-papers trees into a session worktree so the playbook paths
+/// resolve. A project's own papers are reachable at a relative path when the
+/// worktree lives inside the project dir; otherwise they must be copied. Global
+/// papers live in the data dir and are always staged. The destination is
+/// already git-ignored via `.openresearch/`. Returns `true` when files were
+/// copied.
+pub fn stage_into_worktree(store: &Store, project: &LocalProject, worktree: &Path) -> Result<bool> {
     let canonical_project = canonicalize(Path::new(&project.project_dir))
         .map_err(|e| anyhow!("Could not canonicalize project dir: {e}"))?;
     let canonical_worktree =
         canonicalize(worktree).map_err(|e| anyhow!("Could not canonicalize worktree: {e}"))?;
-    if canonical_worktree.starts_with(&canonical_project) {
-        return Ok(false);
-    }
+    let inside_project = canonical_worktree.starts_with(&canonical_project);
     let dest = worktree.join(TEAM_PAPERS_DIR);
-    crate::local::user_skills::copy_dir_all(&source, &dest)
-        .map_err(|e| anyhow!("Could not stage team papers into worktree: {e}"))?;
-    Ok(true)
+    let mut copied = false;
+    let mut copy = |source: PathBuf| -> Result<()> {
+        if !source.exists() {
+            return Ok(());
+        }
+        crate::local::user_skills::copy_dir_all(&source, &dest)
+            .map_err(|e| anyhow!("Could not stage team papers into worktree: {e}"))?;
+        copied = true;
+        Ok(())
+    };
+    if !inside_project {
+        copy(PaperScope::Project(project).dir(store))?;
+    }
+    copy(PaperScope::Global.dir(store))?;
+    Ok(copied)
 }
 
-/// Markdown line for the playbook listing team papers with a path relative to
-/// the session worktree. Returns an empty string when there are no papers.
+/// Markdown line for the playbook listing the global team papers plus the
+/// project's own, each with a path relative to the session worktree. Returns an
+/// empty string when there are no papers.
 pub fn playbook_line(project: &LocalProject, worktree: &Path, store: &Store) -> Result<String> {
-    let papers = store.list_team_papers(&project.id)?;
+    let papers = store.list_team_papers(Some(&project.id))?;
     if papers.is_empty() {
         return Ok(String::new());
     }
@@ -221,10 +259,13 @@ pub fn playbook_line(project: &LocalProject, worktree: &Path, store: &Store) -> 
     let lines: Vec<String> = papers
         .iter()
         .map(|p| {
-            let rel = if inside {
-                format!("../../{TEAM_PAPERS_DIR}/{}/paper.txt", p.id)
-            } else {
+            // Global papers are always staged into the worktree, so they are
+            // addressed from its root; a project paper rides the relative path
+            // back to the project tree while the worktree lives inside it.
+            let rel = if p.project_id.is_none() || !inside {
                 format!("{TEAM_PAPERS_DIR}/{}/paper.txt", p.id)
+            } else {
+                format!("../../{TEAM_PAPERS_DIR}/{}/paper.txt", p.id)
             };
             format!("  - {} (`{rel}`)", p.display_title())
         })
@@ -264,6 +305,18 @@ mod tests {
         b"%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n3 0 obj<</Type/Page/MediaBox[0 0 612 792]>>endobj\nxref\n0 4\n0000000000 65535 f\n0000000009 00000 n\n0000000052 00000 n\n0000000101 00000 n\ntrailer<</Size 4/Root 1 0 R>>\nstartxref\n147\n%%EOF\n".to_vec()
     }
 
+    fn create_req(filename: &str) -> CreateTeamPaperReq {
+        CreateTeamPaperReq {
+            filename: filename.to_string(),
+            content_base64: base64::engine::general_purpose::STANDARD.encode(pdf_bytes()),
+            title: None,
+            authors: None,
+            tags: None,
+            notes: None,
+            source_url: None,
+        }
+    }
+
     #[test]
     fn save_team_paper_writes_pdf_and_row() {
         let dir = std::env::temp_dir().join(format!("orx-team-papers-{}", uuid::Uuid::new_v4()));
@@ -276,7 +329,7 @@ mod tests {
         let encoded = base64::engine::general_purpose::STANDARD.encode(pdf_bytes());
         let paper = save_team_paper(
             &store,
-            &project,
+            PaperScope::Project(&project),
             CreateTeamPaperReq {
                 filename: "paper.pdf".to_string(),
                 content_base64: encoded,
@@ -289,15 +342,59 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(paper.project_id, project.id);
+        assert_eq!(paper.project_id.as_deref(), Some(project.id.as_str()));
         assert_eq!(paper.filename, "paper.pdf");
         assert_eq!(paper.title.as_deref(), Some("Test Paper"));
         assert_eq!(paper.authors, vec!["A. Author"]);
-        assert!(paper_pdf_path(&project, &paper.id).exists());
+        assert!(PaperScope::Project(&project)
+            .pdf_path(&store, &paper.id)
+            .exists());
 
-        let listed = store.list_team_papers(&project.id).unwrap();
+        let listed = store.list_team_papers(Some(&project.id)).unwrap();
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].id, paper.id);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A global paper is stored under the data dir with a NULL `project_id`, is
+    /// listed by both the global and every project view, and round-trips its
+    /// text through the global scope.
+    #[test]
+    fn global_paper_round_trip() {
+        let dir = std::env::temp_dir().join(format!("orx-team-papers-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let project = project_fixture(&dir);
+        let store = Store::open_at(dir.join("store")).unwrap();
+        store.create_local_project(&project).unwrap();
+
+        let paper = save_team_paper(&store, PaperScope::Global, create_req("global.pdf")).unwrap();
+        assert_eq!(paper.project_id, None);
+
+        // Global list holds it; a project's list holds the globals plus its own.
+        assert_eq!(store.list_team_papers(None).unwrap().len(), 1);
+        let project_list = store.list_team_papers(Some(&project.id)).unwrap();
+        assert_eq!(project_list.len(), 1);
+        assert_eq!(project_list[0].id, paper.id);
+
+        // Files live under the data dir, never in the project tree.
+        let pdf = PaperScope::Global.pdf_path(&store, &paper.id);
+        assert!(pdf.starts_with(dir.join("store")));
+        assert!(pdf.exists());
+        let text = PaperScope::Global.text_path(&store, &paper.id);
+        std::fs::write(&text, "global knowledge").unwrap();
+        assert_eq!(
+            read_text(&store, PaperScope::Global, &paper.id).unwrap(),
+            "global knowledge"
+        );
+        assert!(!Path::new(&project.project_dir)
+            .join(TEAM_PAPERS_DIR)
+            .join(&paper.id)
+            .exists());
+
+        delete_team_paper(&store, PaperScope::Global, &paper.id).unwrap();
+        assert!(store.get_team_paper(&paper.id).unwrap().is_none());
+        assert!(!pdf.exists());
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -313,8 +410,19 @@ mod tests {
         store.create_local_project(&project).unwrap();
 
         for id in ["..", "", "../../etc", "a/b"] {
-            assert!(read_text(&project, id).is_err(), "{id}");
-            assert!(delete_team_paper(&store, &project, id).is_err(), "{id}");
+            assert!(
+                read_text(&store, PaperScope::Project(&project), id).is_err(),
+                "{id}"
+            );
+            assert!(read_text(&store, PaperScope::Global, id).is_err(), "{id}");
+            assert!(
+                delete_team_paper(&store, PaperScope::Project(&project), id).is_err(),
+                "{id}"
+            );
+            assert!(
+                delete_team_paper(&store, PaperScope::Global, id).is_err(),
+                "{id}"
+            );
         }
         assert!(dir.is_dir());
 
@@ -330,62 +438,95 @@ mod tests {
         let store = Store::open_at(store_dir).unwrap();
         store.create_local_project(&project).unwrap();
 
-        let encoded = base64::engine::general_purpose::STANDARD.encode(pdf_bytes());
         let paper = save_team_paper(
             &store,
-            &project,
-            CreateTeamPaperReq {
-                filename: "paper.pdf".to_string(),
-                content_base64: encoded,
-                title: None,
-                authors: None,
-                tags: None,
-                notes: None,
-                source_url: None,
-            },
+            PaperScope::Project(&project),
+            create_req("paper.pdf"),
         )
         .unwrap();
 
-        delete_team_paper(&store, &project, &paper.id).unwrap();
+        delete_team_paper(&store, PaperScope::Project(&project), &paper.id).unwrap();
         assert!(store.get_team_paper(&paper.id).unwrap().is_none());
-        assert!(!paper_pdf_path(&project, &paper.id).exists());
+        assert!(!PaperScope::Project(&project)
+            .pdf_path(&store, &paper.id)
+            .exists());
 
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Deleting the project drops the rows, so the uploaded files have to go with
-    /// them or they stay behind as unreferenced orphans.
+    /// them or they stay behind as unreferenced orphans. Global papers live
+    /// under the data dir and must survive both halves untouched.
     #[test]
-    fn remove_team_papers_dir_clears_every_paper_tree() {
+    fn deleting_a_project_removes_only_its_own_papers() {
         let dir = std::env::temp_dir().join(format!("orx-team-papers-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let project = project_fixture(&dir);
         let store = Store::open_at(dir.join("store")).unwrap();
         store.create_local_project(&project).unwrap();
-        let encoded = base64::engine::general_purpose::STANDARD.encode(pdf_bytes());
-        for name in ["one.pdf", "two.pdf"] {
-            save_team_paper(
-                &store,
-                &project,
-                CreateTeamPaperReq {
-                    filename: name.to_string(),
-                    content_base64: encoded.clone(),
-                    title: None,
-                    authors: None,
-                    tags: None,
-                    notes: None,
-                    source_url: None,
-                },
-            )
-            .unwrap();
-        }
-        assert_eq!(store.list_team_papers(&project.id).unwrap().len(), 2);
-        assert!(team_papers_dir(&project).is_dir());
 
+        let global = save_team_paper(&store, PaperScope::Global, create_req("global.pdf")).unwrap();
+        let own =
+            save_team_paper(&store, PaperScope::Project(&project), create_req("own.pdf")).unwrap();
+        let global_pdf = PaperScope::Global.pdf_path(&store, &global.id);
+        let own_pdf = PaperScope::Project(&project).pdf_path(&store, &own.id);
+        assert!(global_pdf.exists());
+        assert!(own_pdf.exists());
+
+        // Mirror the delete-project path: rows first, then the project's files.
+        store.delete_local_project(&project.id).unwrap();
         remove_team_papers_dir(&project).unwrap();
-        assert!(!team_papers_dir(&project).exists());
+
+        assert!(store.get_team_paper(&own.id).unwrap().is_none());
+        assert!(!own_pdf.exists());
+        assert!(store.get_team_paper(&global.id).unwrap().is_some());
+        assert!(global_pdf.exists());
         // The rest of the project directory is untouched.
         assert!(dir.is_dir());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The playbook lists the global papers plus the project's own, each with a
+    /// worktree-relative path that resolves to where it was staged.
+    #[test]
+    fn playbook_line_includes_global_and_project_papers() {
+        let dir = std::env::temp_dir().join(format!("orx-team-papers-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let project = project_fixture(&dir);
+        let store = Store::open_at(dir.join("store")).unwrap();
+        store.create_local_project(&project).unwrap();
+
+        let global = save_team_paper(&store, PaperScope::Global, create_req("global.pdf")).unwrap();
+        let own =
+            save_team_paper(&store, PaperScope::Project(&project), create_req("own.pdf")).unwrap();
+
+        let worktree = dir.join("sessions").join("s1");
+        std::fs::create_dir_all(&worktree).unwrap();
+        let line = playbook_line(&project, &worktree, &store).unwrap();
+
+        assert!(line.contains("Team papers (2)"), "{line}");
+        assert!(
+            line.contains(&format!("{TEAM_PAPERS_DIR}/{}/paper.txt", global.id)),
+            "{line}"
+        );
+        assert!(
+            line.contains(&format!("../../{TEAM_PAPERS_DIR}/{}/paper.txt", own.id)),
+            "{line}"
+        );
+
+        // Staging always copies the globals; the project's own papers stay put
+        // and are reached through the printed relative path.
+        assert!(stage_into_worktree(&store, &project, &worktree).unwrap());
+        assert!(worktree
+            .join(TEAM_PAPERS_DIR)
+            .join(&global.id)
+            .join("paper.pdf")
+            .exists());
+        assert!(worktree
+            .join(format!("../../{TEAM_PAPERS_DIR}/{}", own.id))
+            .join("paper.pdf")
+            .exists());
 
         let _ = std::fs::remove_dir_all(&dir);
     }
