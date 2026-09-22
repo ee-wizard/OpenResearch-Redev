@@ -86,6 +86,7 @@ export function invalidateWrite(url: string, scope: ReturnType<typeof workspaceS
   if (path.startsWith("/api/local-models") && !/\/(discover|check)$/.test(path)) { invalidate(["getLocalModels", "getHarnesses"], scope); return; }
   if (path === "/api/user-skills") { invalidate(["listUserSkills", "getSkills", "getSkillContent"], scope); return; }
   if (path === "/api/latex-templates") { invalidate(["listLatexTemplates"], scope); return; }
+  if (path.startsWith("/api/prompt-gists")) { invalidate(["listPromptGists"], scope); return; }
   if (path === "/api/overleaf/token") { invalidate(["getOverleafSettings", "getOverleafState", "getOverleafStatus"], scope); return; }
   if (path.startsWith("/api/update/")) { invalidate(["getUpdateStatus", "getLocalMachine"], scope); return; }
   if (path.startsWith("/api/remote/") || path.startsWith("/_orx/")) {

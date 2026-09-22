@@ -1736,6 +1736,52 @@ export const deleteUserSkill = (name: string) =>
     json<{ ok: boolean }>(r),
   );
 
+// --- prompt gists -----------------------------------------------------------
+
+export interface PromptGist {
+  id: string;
+  projectId: string | null;
+  name: string;
+  content: string;
+  description?: string;
+  tags: string[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+const promptGistQuery = (projectId?: string) =>
+  projectId ? `?projectId=${encodeURIComponent(projectId)}` : "";
+
+export const listPromptGists = (projectId?: string, signal?: AbortSignal) =>
+  get<{ gists: PromptGist[] }>(`/api/prompt-gists${promptGistQuery(projectId)}`, signal).then(
+    (r) => r.gists,
+  );
+
+export const createPromptGist = (body: {
+  projectId?: string | null;
+  name: string;
+  content: string;
+  description?: string;
+  tags?: string[];
+}) => post<PromptGist>("/api/prompt-gists", body);
+
+export const updatePromptGist = (
+  id: string,
+  body: {
+    projectId?: string | null;
+    name?: string;
+    content?: string;
+    description?: string;
+    tags?: string[];
+  },
+) =>
+  patch<PromptGist>(`/api/prompt-gists/${encodeURIComponent(id)}${promptGistQuery(body.projectId ?? undefined)}`, body);
+
+export const deletePromptGist = (id: string, projectId?: string) =>
+  writeResponse(`/api/prompt-gists/${encodeURIComponent(id)}${promptGistQuery(projectId)}`, {
+    method: "DELETE",
+  }).then((r) => json<{ ok: boolean }>(r));
+
 /** "openai/gpt-5.5" → "GPT 5.5", "anthropic/claude-opus-4-8" → "Opus 4.8". */
 export function modelLabel(id: string): string {
   const last = (id.split("/").pop() ?? id).replace(/^~/, "").replace(/^claude-/, "");

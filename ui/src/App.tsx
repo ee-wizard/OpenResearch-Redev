@@ -44,6 +44,7 @@ import {
   sameCodeTab,
   type RightTab,
   type ContentTab,
+  type PromptGistsTabDef,
   rightTabKey,
   withoutTab,
   isPresent,
@@ -70,6 +71,7 @@ import {
   FlaskConical,
   FolderGit2,
   FolderOpen,
+  Lightbulb,
   Maximize2,
   Minimize2,
   Package,
@@ -104,6 +106,7 @@ import { CodeTab, type CodeView } from "./components/CodeTab";
 import { WorktreeTab, type WorktreeView } from "./components/WorktreeTab";
 import { ArtifactsTab, findArtifactEntry } from "./components/ArtifactsTab";
 import { SkillsTab } from "./components/SkillsTab";
+import { PromptGistsTab } from "./components/PromptGistsTab";
 import { ClosableTab } from "./components/ClosableTab";
 import { DetailDrawer, type ExperimentView } from "./components/DetailDrawer";
 import { FileViewer, type FileScrollPosition } from "./components/FileViewer";
@@ -381,6 +384,7 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
   const [filesTabOpen, setFilesTabOpen] = useState(false);
   const [artifactsTabOpen, setArtifactsTabOpen] = useState(false);
   const [terminalTabOpen, setTerminalTabOpen] = useState(false);
+  const [promptGistsTabOpen, setPromptGistsTabOpen] = useState(false);
   // Which checkout has a live shell; a restored-but-unselected tab spawns nothing until selected.
   const [terminalStartedFor, setTerminalStartedFor] = useState<string | null>(null);
   const [expTabs, setExpTabs] = useState<ExpViewDef[]>([]);
@@ -584,6 +588,7 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
     filesTabOpen,
     artifactsTabOpen,
     terminalTabOpen,
+    promptGistsTabOpen,
     expTabs,
     fileTabs,
     planTabs,
@@ -614,6 +619,7 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
     setFilesTabOpen(state.filesTabOpen);
     setArtifactsTabOpen(state.artifactsTabOpen);
     setTerminalTabOpen(state.terminalTabOpen);
+    setPromptGistsTabOpen(state.promptGistsTabOpen);
     setExpTabs(state.expTabs);
     setFileTabs(state.fileTabs);
     setPlanTabs((current) => current === state.planTabs ? current : state.planTabs.map((tab) => ({ ...tab, plan: current.find((item) => item.sessionId === tab.sessionId && item.promptId === tab.promptId)?.plan ?? "" })));
@@ -868,6 +874,11 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
   const openTerminalTab = useCallback(() => {
     setTerminalTabOpen(true);
     selectRightTab("terminal");
+  }, [selectRightTab]);
+
+  const openPromptGistsTab = useCallback(() => {
+    setPromptGistsTabOpen(true);
+    selectRightTab("promptGists");
   }, [selectRightTab]);
   const terminalKey = activeSessionId ?? (projectId ? `project:${projectId}` : null);
   useEffect(() => {
@@ -1321,13 +1332,14 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
   }, [selectRightTab]);
 
   const closeHomeTab = useCallback(
-    (tab: "experiments" | "files" | "artifacts" | "terminal") => {
+    (tab: "experiments" | "files" | "artifacts" | "terminal" | PromptGistsTabDef) => {
       if (tab === "experiments") setExperimentsTabOpen(false);
       else if (tab === "files") setFilesTabOpen(false);
       else if (tab === "terminal") {
         setTerminalTabOpen(false);
         setTerminalStartedFor(null);
       }
+      else if (tab === "promptGists") setPromptGistsTabOpen(false);
       else setArtifactsTabOpen(false);
       forgetRightTab(tab, rightTab === tab);
     },
@@ -1615,6 +1627,8 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
             onActiveSessionChange={onActiveSessionChange}
             preferredAgent={uiState.preferredAgent}
             onPreferredAgentChange={persistPreferredAgent}
+            onOpenPromptGists={openPromptGistsTab}
+            promptGistsActive={rightTab === "promptGists"}
           >
             {mainView === "skills" ? (
               <SkillsTab />
@@ -1698,6 +1712,15 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
                     icon={<FlaskConical size={12} className="shrink-0" />}
                     onSelect={() => selectRightTab("experiments")}
                     onClose={() => closeHomeTab("experiments")}
+                  />
+                )}
+                {promptGistsTabOpen && (
+                  <ClosableTab
+                    active={rightTab === "promptGists"}
+                    label={m.prompt_gists_title()}
+                    icon={<Lightbulb size={12} className="shrink-0" />}
+                    onSelect={() => selectRightTab("promptGists")}
+                    onClose={() => closeHomeTab("promptGists")}
                   />
                 )}
                 {orderedContentTabs.map(renderContentTab)}
@@ -1859,6 +1882,12 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
                     />
                   )}
                 </div>
+              </TabBody>
+            ) : rightTab === "promptGists" ? (
+              <TabBody>
+                {activeProject && (
+                  <PromptGistsTab projectId={activeProject.id} />
+                )}
               </TabBody>
             ) : rightTab === "files" ? (
               <TabBody>

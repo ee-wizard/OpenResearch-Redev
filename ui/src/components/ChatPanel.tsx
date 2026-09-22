@@ -146,6 +146,7 @@ import { LitSourceLogo, parseOrxLit, paperUrl } from "./LitSourceLogo";
 import { LitSourcesList } from "./LitSourcesPicker";
 import { Md } from "./Md";
 import { PlanStrip } from "./PlanStrip";
+import { PromptGistPicker } from "./PromptGistsTab";
 import { SETTINGS_NAV, type SettingsTab } from "./SettingsPage";
 import { SkillMenu } from "./SkillMenu";
 import { ComposerSkillChips, MessageWithChips, skillMarginSpaces } from "./SkillChips";
@@ -4253,6 +4254,8 @@ export function ChatPanel({
   onActiveSessionChange,
   preferredAgent,
   onPreferredAgentChange,
+  onOpenPromptGists,
+  promptGistsActive = false,
   children,
 }: {
   projectId: string;
@@ -4313,6 +4316,10 @@ export function ChatPanel({
   /** Database-backed selection used to seed new chat sessions. */
   preferredAgent: ModelSelection | null;
   onPreferredAgentChange: (selection: ModelSelection) => Promise<void>;
+  /** Open the Prompt Gists tab in the right pane. */
+  onOpenPromptGists?: () => void;
+  /** Whether the Prompt Gists right-panel tab is currently active. */
+  promptGistsActive?: boolean;
   /** Middle-pane content when a settings section is active. */
   children?: React.ReactNode;
 }) {
@@ -5843,6 +5850,15 @@ export function ChatPanel({
           <Blocks size={15} />
           {m.chat_panel_customize()}
         </button>
+        {onOpenPromptGists && (
+          <button
+            className={`rail-nav-item flex items-center gap-2.5 py-[7px] px-2.5 text-base text-text rounded-md text-start [&:hover:not(.active)]:bg-surface [&.active]:bg-panel [&.active]:font-medium ${promptGistsActive ? "active" : ""}`}
+            onClick={onOpenPromptGists}
+          >
+            <Lightbulb size={15} />
+            {m.prompt_gists_title()}
+          </button>
+        )}
         {SETTINGS_NAV.map((item) => (
           <button
             key={item.id}
@@ -6520,6 +6536,15 @@ export function ChatPanel({
               >
                 <Paperclip size={16} />
               </IconButton>
+              <PromptGistPicker
+                projectId={projectId}
+                textareaRef={composerRef}
+                draft={draft}
+                onDraftChange={(text, cursor) => {
+                  setDraft(text);
+                  setComposerCursor(cursor);
+                }}
+              />
               {planActive && (
                 <Button
                   type="button"
