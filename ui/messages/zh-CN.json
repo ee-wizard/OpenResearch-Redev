@@ -232,6 +232,7 @@
   "new_project_form_paper": "论文",
   "new_project_form_project_location": "项目位置",
   "new_project_form_project_name": "项目名称",
+  "new_project_form_non_ascii_name_hint": "非 ASCII 字符（如中文）将从 GitHub 仓库名中移除。建议使用纯英文名称。",
   "new_project_form_search_for_a_paper_by_ar_xiv_id": "按 arXiv ID、网址或标题搜索论文",
   "new_project_form_sync_experiments_to_git_hub": "将实验同步到 GitHub",
   "new_project_form_that_folder_no_longer_exists_choose_it_again": "该文件夹已不存在。请重新选择。",

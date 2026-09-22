@@ -232,6 +232,7 @@
   "new_project_form_paper": "Paper",
   "new_project_form_project_location": "Project location",
   "new_project_form_project_name": "Project name",
+  "new_project_form_non_ascii_name_hint": "Non-ASCII characters (e.g. Chinese) will be removed from the GitHub repository name. Consider using an ASCII-only name.",
   "new_project_form_search_for_a_paper_by_ar_xiv_id": "Search for a paper by arXiv ID, URL, or title",
   "new_project_form_sync_experiments_to_git_hub": "Sync experiments to GitHub",
   "new_project_form_that_folder_no_longer_exists_choose_it_again": "That folder no longer exists. Choose it again.",

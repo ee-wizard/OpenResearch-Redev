@@ -115,6 +115,22 @@ pub async fn create_project_repo(repo: &str) -> Result<(String, String)> {
     ))
 }
 
+/// Delete a GitHub repository. Returns `Ok(true)` if the repo was deleted,
+/// `Ok(false)` if it didn't exist, or `Err` on failure. Non-fatal — callers
+/// should log the error and continue with local cleanup.
+pub async fn delete_project_repo(owner: &str, repo: &str) -> Result<bool> {
+    match gh(
+        &["repo", "delete", &format!("{owner}/{repo}"), "--yes"],
+        Duration::from_secs(30),
+    )
+    .await
+    {
+        Ok(_) => Ok(true),
+        Err(error) if github_api_not_found(&error.to_string()) => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
 pub async fn available_project_repo_name(repo: &str) -> Result<String> {
     let owner = viewer_login().await?;
     for suffix in 1..=100 {

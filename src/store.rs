@@ -14,7 +14,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 
 use crate::error::{anyhow, Result};
-use crate::local::model::{LocalExperiment, LocalProject};
+use crate::local::model::{LocalExperiment, LocalProject, TeamPaper};
 use crate::workspace_state::{GlobalWorkspaceState, WorkspaceState};
 
 pub fn data_dir() -> PathBuf {
@@ -435,6 +435,7 @@ impl Store {
                 github_sync_enabled INTEGER NOT NULL DEFAULT 1,
                 baseline_branch TEXT NOT NULL DEFAULT 'main',
                 repo_path       TEXT NOT NULL,
+                project_dir     TEXT NOT NULL,
                 run_command     TEXT,
                 paper_id        TEXT,
                 created_at      INTEGER NOT NULL,
@@ -577,6 +578,23 @@ impl Store {
                 root       TEXT NOT NULL DEFAULT '',
                 PRIMARY KEY (project_id, tex_path)
             );
+            CREATE TABLE IF NOT EXISTS team_papers (
+                id          TEXT PRIMARY KEY,
+                project_id  TEXT NOT NULL,
+                filename    TEXT NOT NULL,
+                title       TEXT,
+                authors_json TEXT NOT NULL DEFAULT '[]',
+                tags_json   TEXT NOT NULL DEFAULT '[]',
+                notes       TEXT,
+                source_url  TEXT,
+                page_count  INTEGER,
+                extracted_at INTEGER,
+                created_at  INTEGER NOT NULL,
+                updated_at  INTEGER NOT NULL,
+                FOREIGN KEY (project_id) REFERENCES local_projects(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_team_papers_project
+                ON team_papers(project_id, created_at);
             CREATE TABLE IF NOT EXISTS ui_state (
                 id                       INTEGER PRIMARY KEY CHECK (id = 1),
                 onboarding_completed     INTEGER NOT NULL DEFAULT 0,
@@ -607,6 +625,8 @@ impl Store {
             "ALTER TABLE local_projects ADD COLUMN paper_id TEXT",
             "ALTER TABLE local_projects ADD COLUMN github_sync_enabled INTEGER NOT NULL DEFAULT 1",
             "ALTER TABLE local_projects ADD COLUMN workspace_state_json TEXT",
+            "ALTER TABLE local_projects ADD COLUMN project_dir TEXT NOT NULL DEFAULT ''",
+            "UPDATE local_projects SET project_dir = repo_path WHERE project_dir = ''",
             "ALTER TABLE local_experiments ADD COLUMN chat_session_id TEXT",
             "ALTER TABLE ssh_host_tests ADD COLUMN tools_found INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE ssh_host_tests ADD COLUMN missing_tools TEXT NOT NULL DEFAULT ''",
@@ -1492,7 +1512,7 @@ impl Store {
     ) -> Result<bool> {
         let tx = self.begin()?;
         let inserted = tx.execute(
-            &format!("INSERT OR IGNORE INTO local_projects ({PROJECT_COLS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)"),
+            &format!("INSERT OR IGNORE INTO local_projects ({PROJECT_COLS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)"),
             params![
                 project.id,
                 project.name,
@@ -1502,6 +1522,7 @@ impl Store {
                 project.github_sync_enabled,
                 project.baseline_branch,
                 project.repo_path,
+                project.project_dir,
                 project.run_command,
                 project.paper_id,
                 project.created_at,
@@ -1608,11 +1629,11 @@ impl Store {
 
     pub fn create_local_project(&self, p: &LocalProject) -> Result<()> {
         self.conn.execute(
-            &format!("INSERT INTO local_projects ({PROJECT_COLS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)"),
+            &format!("INSERT INTO local_projects ({PROJECT_COLS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)"),
             params![
                 p.id, p.name, p.slug, p.github_owner, p.github_repo,
-                p.github_sync_enabled, p.baseline_branch, p.repo_path, p.run_command, p.paper_id,
-                p.created_at, p.updated_at,
+                p.github_sync_enabled, p.baseline_branch, p.repo_path, p.project_dir,
+                p.run_command, p.paper_id, p.created_at, p.updated_at,
             ],
         )?;
         Ok(())
@@ -1652,13 +1673,14 @@ impl Store {
     }
 
     /// Delete a project and everything hanging off it (chats, runs,
-    /// experiments) in one transaction. GitHub repo and cache clone are kept.
+    /// experiments, team papers) in one transaction. GitHub repo and cache clone are kept.
     pub fn delete_local_project(&self, id: &str) -> Result<()> {
         let tx = self.begin()?;
         tx.execute(
             "DELETE FROM overleaf_links WHERE project_id = ?1",
             params![id],
         )?;
+        tx.execute("DELETE FROM team_papers WHERE project_id = ?1", params![id])?;
         tx.execute(
             "DELETE FROM chat_queued_messages WHERE session_id IN
                (SELECT id FROM chat_sessions WHERE project_id = ?1)",
@@ -1710,7 +1732,7 @@ impl Store {
         self.conn.execute(
             "UPDATE local_projects SET name = ?2, slug = ?3, github_owner = ?4, github_repo = ?5,
                     github_sync_enabled = ?6, baseline_branch = ?7, repo_path = ?8,
-                    run_command = ?9, paper_id = ?10, updated_at = ?11
+                    project_dir = ?9, run_command = ?10, paper_id = ?11, updated_at = ?12
              WHERE id = ?1",
             params![
                 p.id,
@@ -1721,6 +1743,7 @@ impl Store {
                 p.github_sync_enabled,
                 p.baseline_branch,
                 p.repo_path,
+                p.project_dir,
                 p.run_command,
                 p.paper_id,
                 now_ms(),
@@ -1778,6 +1801,77 @@ impl Store {
             ],
         )?;
         Ok(())
+    }
+
+    // --- team papers ------------------------------------------------------
+
+    pub fn create_team_paper(&self, p: &TeamPaper) -> Result<()> {
+        self.conn.execute(
+            &format!("INSERT INTO team_papers ({TEAM_PAPER_COLS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)"),
+            params![
+                p.id,
+                p.project_id,
+                p.filename,
+                p.title,
+                serde_json::to_string(&p.authors)?,
+                serde_json::to_string(&p.tags)?,
+                p.notes,
+                p.source_url,
+                p.page_count,
+                p.extracted_at,
+                p.created_at,
+                p.updated_at,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_team_paper(&self, id: &str) -> Result<Option<TeamPaper>> {
+        let p = self
+            .conn
+            .query_row(
+                &format!("SELECT {TEAM_PAPER_COLS} FROM team_papers WHERE id = ?1"),
+                params![id],
+                TeamPaper::from_row,
+            )
+            .optional()?;
+        Ok(p)
+    }
+
+    pub fn list_team_papers(&self, project_id: &str) -> Result<Vec<TeamPaper>> {
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {TEAM_PAPER_COLS} FROM team_papers WHERE project_id = ?1 ORDER BY created_at ASC"
+        ))?;
+        let rows = stmt.query_map(params![project_id], TeamPaper::from_row)?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    pub fn update_team_paper(&self, p: &TeamPaper) -> Result<bool> {
+        let n = self.conn.execute(
+            "UPDATE team_papers SET filename = ?2, title = ?3, authors_json = ?4, tags_json = ?5,
+                    notes = ?6, source_url = ?7, page_count = ?8, extracted_at = ?9, updated_at = ?10
+             WHERE id = ?1",
+            params![
+                p.id,
+                p.filename,
+                p.title,
+                serde_json::to_string(&p.authors)?,
+                serde_json::to_string(&p.tags)?,
+                p.notes,
+                p.source_url,
+                p.page_count,
+                p.extracted_at,
+                now_ms(),
+            ],
+        )?;
+        Ok(n > 0)
+    }
+
+    pub fn delete_team_paper(&self, id: &str) -> Result<bool> {
+        let n = self
+            .conn
+            .execute("DELETE FROM team_papers WHERE id = ?1", params![id])?;
+        Ok(n > 0)
     }
 
     // --- chat sessions / messages ------------------------------------------
@@ -3044,11 +3138,14 @@ const SELECT_RUN: &str = "SELECT id, experiment_id, project_id, status, backend_
                                  chat_session_id FROM runs";
 
 const PROJECT_COLS: &str = "id, name, slug, github_owner, github_repo, github_sync_enabled, \
-                            baseline_branch, repo_path, run_command, paper_id, created_at, updated_at";
+                            baseline_branch, repo_path, project_dir, run_command, paper_id, created_at, updated_at";
 
 const EXPERIMENT_COLS: &str = "id, project_id, parent_experiment_id, slug, branch_name, \
                                title, description, run_command, agent_status, created_at, \
                                updated_at, chat_session_id";
+
+const TEAM_PAPER_COLS: &str = "id, project_id, filename, title, authors_json, tags_json, notes, \
+                               source_url, page_count, extracted_at, created_at, updated_at";
 
 fn row_to_run(row: &rusqlite::Row<'_>) -> std::result::Result<StoredRun, rusqlite::Error> {
     Ok(StoredRun {
@@ -3134,6 +3231,7 @@ mod tests {
                     github_sync_enabled: false,
                     baseline_branch: "main".into(),
                     repo_path: dir.join(id).to_string_lossy().into_owned(),
+                    project_dir: dir.join(id).to_string_lossy().into_owned(),
                     run_command: None,
                     paper_id: None,
                     created_at: 1,
@@ -3281,6 +3379,7 @@ mod tests {
                 github_sync_enabled: false,
                 baseline_branch: "main".into(),
                 repo_path: dir.join("project").to_string_lossy().into_owned(),
+                project_dir: dir.join("project").to_string_lossy().into_owned(),
                 run_command: None,
                 paper_id: None,
                 created_at: 1,
@@ -4968,6 +5067,7 @@ mod tests {
                 github_sync_enabled: false,
                 baseline_branch: "main".into(),
                 repo_path: dir.join("project").to_string_lossy().into_owned(),
+                project_dir: dir.join("project").to_string_lossy().into_owned(),
                 run_command: None,
                 paper_id: None,
                 created_at: 1,
@@ -5083,6 +5183,112 @@ mod tests {
             Some("chat_x".to_string()),
             "the creating session is never overwritten by a later update"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn team_paper_fixture(id: &str, filename: &str) -> TeamPaper {
+        TeamPaper {
+            id: id.into(),
+            project_id: "proj_1".into(),
+            filename: filename.into(),
+            title: Some("Team Paper".into()),
+            authors: vec!["A. Author".into()],
+            tags: vec!["tag".into()],
+            notes: None,
+            source_url: None,
+            page_count: Some(4),
+            extracted_at: Some(1000),
+            created_at: 1,
+            updated_at: 1,
+        }
+    }
+
+    #[test]
+    fn team_papers_are_scoped_to_project() {
+        let dir =
+            std::env::temp_dir().join(format!("orx-store-team-paper-{}", uuid::Uuid::new_v4()));
+        let store = Store::open_at(dir.clone()).unwrap();
+        store
+            .create_local_project(&LocalProject {
+                id: "proj_1".into(),
+                name: "Project".into(),
+                slug: "project".into(),
+                github_owner: String::new(),
+                github_repo: String::new(),
+                github_sync_enabled: false,
+                baseline_branch: "main".into(),
+                repo_path: dir.join("project").to_string_lossy().into_owned(),
+                project_dir: dir.join("project").to_string_lossy().into_owned(),
+                run_command: None,
+                paper_id: None,
+                created_at: 1,
+                updated_at: 1,
+            })
+            .unwrap();
+
+        store
+            .create_team_paper(&team_paper_fixture("tp_1", "a.pdf"))
+            .unwrap();
+        store
+            .create_team_paper(&team_paper_fixture("tp_2", "b.pdf"))
+            .unwrap();
+
+        let papers = store.list_team_papers("proj_1").unwrap();
+        assert_eq!(papers.len(), 2);
+        assert_eq!(store.list_team_papers("proj_2").unwrap().len(), 0);
+
+        let mut updated = team_paper_fixture("tp_1", "a.pdf");
+        updated.title = Some("Renamed".into());
+        updated.tags = vec!["new".into()];
+        assert!(store.update_team_paper(&updated).unwrap());
+        assert_eq!(
+            store
+                .get_team_paper("tp_1")
+                .unwrap()
+                .unwrap()
+                .title
+                .as_deref(),
+            Some("Renamed")
+        );
+
+        assert!(store.delete_team_paper("tp_1").unwrap());
+        assert!(store.get_team_paper("tp_1").unwrap().is_none());
+        assert_eq!(store.list_team_papers("proj_1").unwrap().len(), 1);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn deleting_project_cascades_to_team_papers() {
+        let dir = std::env::temp_dir().join(format!(
+            "orx-store-team-paper-cascade-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let store = Store::open_at(dir.clone()).unwrap();
+        store
+            .create_local_project(&LocalProject {
+                id: "proj_1".into(),
+                name: "Project".into(),
+                slug: "project".into(),
+                github_owner: String::new(),
+                github_repo: String::new(),
+                github_sync_enabled: false,
+                baseline_branch: "main".into(),
+                repo_path: dir.join("project").to_string_lossy().into_owned(),
+                project_dir: dir.join("project").to_string_lossy().into_owned(),
+                run_command: None,
+                paper_id: None,
+                created_at: 1,
+                updated_at: 1,
+            })
+            .unwrap();
+        store
+            .create_team_paper(&team_paper_fixture("tp_1", "a.pdf"))
+            .unwrap();
+
+        store.delete_local_project("proj_1").unwrap();
+        assert!(store.get_team_paper("tp_1").unwrap().is_none());
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

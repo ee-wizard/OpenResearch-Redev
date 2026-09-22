@@ -232,6 +232,7 @@
   "new_project_form_paper": "पेपर",
   "new_project_form_project_location": "प्रोजेक्ट स्थान",
   "new_project_form_project_name": "प्रोजेक्ट नाम",
+  "new_project_form_non_ascii_name_hint": "Non-ASCII characters (e.g. Chinese) will be removed from the GitHub repository name. Consider using an ASCII-only name.",
   "new_project_form_search_for_a_paper_by_ar_xiv_id": "arXiv ID, URL, या शीर्षक से पेपर खोजें",
   "new_project_form_sync_experiments_to_git_hub": "प्रयोग GitHub पर सिंक करें",
   "new_project_form_that_folder_no_longer_exists_choose_it_again": "वह फ़ोल्डर अब मौजूद नहीं है। इसे फिर से चुनें।",

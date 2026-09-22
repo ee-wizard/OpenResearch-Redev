@@ -61,6 +61,9 @@ pub(crate) fn expand_path(path: &str) -> Result<PathBuf> {
 
 const PAPER_PDF_NAME: &str = "paper.pdf";
 
+/// Returns the canonical repository root and whether the caller created the
+/// repository's initial commit (so session-worktree ignores can be amended
+/// into it without adding a second commit).
 fn prepare_path(
     path: &str,
     create_folder: bool,
@@ -69,7 +72,7 @@ fn prepare_path(
     clone_url: Option<&str>,
     shallow_clone: bool,
     paper_pdf: Option<&[u8]>,
-) -> Result<PathBuf> {
+) -> Result<(PathBuf, bool)> {
     let path = expand_path(path)?;
     if let Some(url) = clone_url.map(str::trim).filter(|url| !url.is_empty()) {
         if path.exists() {
@@ -126,10 +129,11 @@ fn prepare_path(
             path.display()
         ));
     }
-    if matches!(
+    let created_initial_commit = matches!(
         repository_state,
         git::RepositoryState::NotRepository | git::RepositoryState::Unborn
-    ) {
+    );
+    if created_initial_commit {
         if !initialize_git {
             return Err(crate::error::anyhow!(
                 "Experiments need a local Git repository. Confirm initialization for {} and try again.",
@@ -151,7 +155,7 @@ fn prepare_path(
     }
     let root = git::repository_root(&path)?;
     git::validate_project_repository(&root)?;
-    Ok(root)
+    Ok((root, created_initial_commit))
 }
 
 /// Register a local folder as a project. No experiments are created —
@@ -169,12 +173,13 @@ pub fn create_project(
         initialize_git,
         clone_url,
         shallow_clone,
+        project_dir,
         run_command,
         paper_id,
         paper_pdf,
     } = options;
     let slug = unique_project_slug(store, &slugify(name))?;
-    let repo_path = prepare_path(
+    let (repo_path, created_initial_commit) = prepare_path(
         path,
         create_folder,
         require_new_folder,
@@ -183,6 +188,24 @@ pub fn create_project(
         shallow_clone,
         paper_pdf.as_deref(),
     )?;
+    let project_dir = match project_dir.filter(|p| !p.trim().is_empty()) {
+        Some(dir) => expand_path(&dir)?,
+        None => repo_path.clone(),
+    };
+    std::fs::create_dir_all(project_dir.join("sessions")).map_err(|e| {
+        crate::error::anyhow!(
+            "Could not create sessions dir {}: {}",
+            project_dir.join("sessions").display(),
+            e
+        )
+    })?;
+    let repo_canonical =
+        crate::paths::canonicalize(&repo_path).unwrap_or_else(|_| repo_path.clone());
+    let dir_canonical =
+        crate::paths::canonicalize(&project_dir).unwrap_or_else(|_| project_dir.clone());
+    if repo_canonical == dir_canonical {
+        ensure_sessions_ignored(&repo_path, created_initial_commit)?;
+    }
     if store
         .list_local_projects()?
         .iter()
@@ -207,6 +230,7 @@ pub fn create_project(
         github_sync_enabled: false,
         baseline_branch,
         repo_path: repo_path.to_string_lossy().to_string(),
+        project_dir: project_dir.to_string_lossy().to_string(),
         run_command: run_command.filter(|c| !c.trim().is_empty()),
         paper_id: paper_id.filter(|p| !p.trim().is_empty()),
         created_at: now,
@@ -216,6 +240,45 @@ pub fn create_project(
     Ok(project)
 }
 
+/// Ensure the repo-root `.gitignore` ignores the per-session worktree folder.
+/// When `commit` is true the change is amended into the current HEAD so the
+/// working tree stays clean for freshly-initialized repositories.
+fn ensure_sessions_ignored(repo_path: &Path, commit: bool) -> Result<()> {
+    let gitignore = repo_path.join(".gitignore");
+    let entry = "sessions/";
+    let mut contents = if gitignore.exists() {
+        std::fs::read_to_string(&gitignore)
+            .map_err(|e| crate::error::anyhow!("reading {}: {}", gitignore.display(), e))?
+    } else {
+        String::new()
+    };
+    if contents.lines().any(|line| line.trim() == entry) {
+        return Ok(());
+    }
+    if !contents.is_empty() && !contents.ends_with('\n') {
+        contents.push('\n');
+    }
+    contents.push_str(entry);
+    contents.push('\n');
+    std::fs::write(&gitignore, contents)
+        .map_err(|e| crate::error::anyhow!("Could not write {}: {}", gitignore.display(), e))?;
+    if commit {
+        git::git(Some(repo_path), &["add", ".gitignore"])?;
+        git::git(
+            Some(repo_path),
+            &[
+                "-c",
+                "commit.gpgSign=false",
+                "commit",
+                "--amend",
+                "--no-edit",
+                "--no-verify",
+            ],
+        )?;
+    }
+    Ok(())
+}
+
 #[derive(Default)]
 pub struct CreateProjectOptions {
     pub create_folder: bool,
@@ -223,6 +286,8 @@ pub struct CreateProjectOptions {
     pub initialize_git: bool,
     pub clone_url: Option<String>,
     pub shallow_clone: bool,
+    /// Optional user-visible project folder. Defaults to the Git repo root.
+    pub project_dir: Option<String>,
     pub run_command: Option<String>,
     pub paper_id: Option<String>,
     pub paper_pdf: Option<Vec<u8>>,
@@ -314,7 +379,46 @@ mod tests {
             Path::new(&project.repo_path),
             crate::paths::canonicalize(&project_path).unwrap()
         );
+        assert_eq!(
+            Path::new(&project.project_dir),
+            crate::paths::canonicalize(&project_path).unwrap()
+        );
         assert!(git::remotes(&project_path).unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn places_session_worktrees_under_a_custom_project_dir() {
+        let root = root();
+        let store = Store::open_at(root.join("data")).unwrap();
+        let repo_path = root.join("repo");
+        let project_dir = root.join("project");
+        let project = create_project(
+            &store,
+            "Custom dir project",
+            repo_path.to_str().unwrap(),
+            CreateProjectOptions {
+                create_folder: true,
+                initialize_git: true,
+                project_dir: Some(project_dir.to_str().unwrap().to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            Path::new(&project.repo_path),
+            crate::paths::canonicalize(&repo_path).unwrap()
+        );
+        assert_eq!(
+            Path::new(&project.project_dir),
+            crate::paths::canonicalize(&project_dir).unwrap()
+        );
+        assert!(project_dir.join("sessions").is_dir());
+        assert!(!repo_path.join("sessions").exists());
+        assert!(!repo_path.join(".gitignore").exists());
+        let session_id = "session-1";
+        let expected = project_dir.join("sessions").join(session_id);
+        assert_eq!(git::session_worktree_path(&project, session_id), expected);
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -422,10 +526,9 @@ mod tests {
             std::fs::read(repo_path.join(PAPER_PDF_NAME)).unwrap(),
             b"%PDF-1.7 test"
         );
-        assert_eq!(
-            git_output(repo_path, &["ls-tree", "-r", "--name-only", "HEAD"]),
-            PAPER_PDF_NAME
-        );
+        let committed = git_output(repo_path, &["ls-tree", "-r", "--name-only", "HEAD"]);
+        assert!(committed.contains(PAPER_PDF_NAME), "{committed}");
+        assert!(committed.contains(".gitignore"), "{committed}");
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -442,9 +545,14 @@ mod tests {
             Path::new(&project.repo_path),
             crate::paths::canonicalize(&nested).unwrap()
         );
-        assert_eq!(
-            git_output(&nested, &["ls-tree", "-r", "--name-only", "HEAD"]),
-            PAPER_PDF_NAME
+        let nested_committed = git_output(&nested, &["ls-tree", "-r", "--name-only", "HEAD"]);
+        assert!(
+            nested_committed.contains(PAPER_PDF_NAME),
+            "{nested_committed}"
+        );
+        assert!(
+            nested_committed.contains(".gitignore"),
+            "{nested_committed}"
         );
 
         let error = paper_project(&store, &repository).unwrap_err().to_string();
@@ -476,11 +584,11 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(
-            git_output(&project_path, &["ls-tree", "-r", "--name-only", "HEAD"]),
-            "src/components/mod.rs\nsrc/main.rs"
-        );
-        assert!(!project_path.join(".gitignore").exists());
+        let tree = git_output(&project_path, &["ls-tree", "-r", "--name-only", "HEAD"]);
+        assert!(tree.contains("src/components/mod.rs"), "{tree}");
+        assert!(tree.contains("src/main.rs"), "{tree}");
+        let gitignore = std::fs::read_to_string(project_path.join(".gitignore")).unwrap();
+        assert!(gitignore.contains("sessions/"));
         assert!(git::is_clean(&project_path).unwrap());
         let _ = std::fs::remove_dir_all(root);
     }
@@ -694,10 +802,9 @@ mod tests {
         );
         assert!(large_file.exists());
         assert!(git::is_clean(&project_path).unwrap());
-        assert_eq!(
-            std::fs::read_to_string(&shared_ignore).unwrap(),
-            "shared rule\n"
-        );
+        let shared_text = std::fs::read_to_string(&shared_ignore).unwrap();
+        assert!(shared_text.starts_with("shared rule\n"), "{shared_text}");
+        assert!(shared_text.contains("sessions/"));
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -742,10 +849,9 @@ mod tests {
         assert!(nested.join(".git").exists());
         assert!(nested.join("checkpoint.bin").exists());
         assert!(git::is_clean(&project_path).unwrap());
-        assert_eq!(
-            std::fs::read_to_string(&shared_ignore).unwrap(),
-            "shared rule\n"
-        );
+        let shared_text = std::fs::read_to_string(&shared_ignore).unwrap();
+        assert!(shared_text.starts_with("shared rule\n"), "{shared_text}");
+        assert!(shared_text.contains("sessions/"));
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -951,7 +1057,8 @@ mod tests {
             git_output(&project_path, &["rev-parse", "HEAD"]),
             original_head
         );
-        assert!(!project_path.join(".gitignore").exists());
+        let gitignore = std::fs::read_to_string(project_path.join(".gitignore")).unwrap();
+        assert!(gitignore.contains("sessions/"));
         assert!(project_path.join("local-checkpoint.bin").exists());
         let _ = std::fs::remove_dir_all(root);
     }
@@ -965,6 +1072,7 @@ mod tests {
         let project_path = root.join("project");
         std::fs::create_dir_all(&project_path).unwrap();
         run_git(&project_path, &["init", "-b", "main"]);
+        std::fs::create_dir_all(project_path.join(".git/hooks")).unwrap();
         run_git(&project_path, &["config", "commit.gpgsign", "true"]);
         run_git(&project_path, &["config", "gpg.program", "false"]);
         std::fs::write(project_path.join("README.md"), "# test\n").unwrap();

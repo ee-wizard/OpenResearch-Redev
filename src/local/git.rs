@@ -68,12 +68,23 @@ pub(crate) fn legacy_cache_root() -> PathBuf {
 }
 
 /// Root for per-chat-session worktrees of a project repository.
-pub fn worktrees_root(project_id: &str) -> PathBuf {
+pub fn worktrees_root(project: &crate::local::model::LocalProject) -> PathBuf {
+    PathBuf::from(&project.project_dir).join("sessions")
+}
+
+pub fn session_worktree_path(
+    project: &crate::local::model::LocalProject,
+    session_id: &str,
+) -> PathBuf {
+    worktrees_root(project).join(session_id)
+}
+
+fn old_worktrees_root(project_id: &str) -> PathBuf {
     crate::store::data_dir().join("worktrees").join(project_id)
 }
 
-pub fn session_worktree_path(project_id: &str, session_id: &str) -> PathBuf {
-    worktrees_root(project_id).join(session_id)
+fn old_session_worktree_path(project_id: &str, session_id: &str) -> PathBuf {
+    old_worktrees_root(project_id).join(session_id)
 }
 
 fn legacy_worktrees_root(owner: &str, repo: &str) -> PathBuf {
@@ -98,7 +109,7 @@ pub fn migrate_legacy_project_worktrees(
     if !legacy_root.is_dir() {
         return Ok(());
     }
-    let current_root = worktrees_root(&project.id);
+    let current_root = worktrees_root(project);
     std::fs::create_dir_all(&current_root)?;
     for session_id in session_ids {
         let source = legacy_root.join(session_id);
@@ -127,9 +138,13 @@ pub fn existing_session_worktree_path(
     project: &crate::local::model::LocalProject,
     session_id: &str,
 ) -> PathBuf {
-    let current = session_worktree_path(&project.id, session_id);
+    let current = session_worktree_path(project, session_id);
     if current.exists() || !project.has_github_repository() {
         return current;
+    }
+    let old = old_session_worktree_path(&project.id, session_id);
+    if old.exists() {
+        return old;
     }
     let legacy =
         legacy_session_worktree_path(&project.github_owner, &project.github_repo, session_id);
@@ -541,6 +556,9 @@ fn replace_managed_ignore_file(path: &Path, excluded_paths: &[Vec<u8>]) -> Resul
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
         Err(error) => return Err(error.into()),
     };
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
     atomic_write(path, &managed_gitignore(&existing, excluded_paths)?)
 }
 

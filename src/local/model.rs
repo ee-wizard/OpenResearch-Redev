@@ -19,6 +19,9 @@ pub struct LocalProject {
     pub baseline_branch: String,
     /// Local repository path.
     pub repo_path: String,
+    /// User-visible project folder. Session worktrees live under
+    /// `<project_dir>/sessions/<session_id>`.
+    pub project_dir: String,
     pub run_command: Option<String>,
     /// arXiv id the project starts from (versionless, e.g. `2401.12345`).
     pub paper_id: Option<String>,
@@ -55,10 +58,11 @@ impl LocalProject {
             github_sync_enabled: row.get(5)?,
             baseline_branch: row.get(6)?,
             repo_path: row.get(7)?,
-            run_command: row.get(8)?,
-            paper_id: row.get(9)?,
-            created_at: row.get(10)?,
-            updated_at: row.get(11)?,
+            project_dir: row.get(8)?,
+            run_command: row.get(9)?,
+            paper_id: row.get(10)?,
+            created_at: row.get(11)?,
+            updated_at: row.get(12)?,
         })
     }
 }
@@ -109,5 +113,51 @@ impl LocalExperiment {
             Some(t) if !t.trim().is_empty() => t,
             _ => &self.slug,
         }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TeamPaper {
+    pub id: String,
+    pub project_id: String,
+    pub filename: String,
+    pub title: Option<String>,
+    pub authors: Vec<String>,
+    pub tags: Vec<String>,
+    pub notes: Option<String>,
+    pub source_url: Option<String>,
+    pub page_count: Option<i64>,
+    pub extracted_at: Option<i64>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+impl TeamPaper {
+    /// Column order must match `store::TEAM_PAPER_COLS`.
+    pub(crate) fn from_row(row: &rusqlite::Row<'_>) -> std::result::Result<Self, rusqlite::Error> {
+        let authors_json: String = row.get(4)?;
+        let tags_json: String = row.get(5)?;
+        Ok(Self {
+            id: row.get(0)?,
+            project_id: row.get(1)?,
+            filename: row.get(2)?,
+            title: row.get(3)?,
+            authors: serde_json::from_str(&authors_json).unwrap_or_default(),
+            tags: serde_json::from_str(&tags_json).unwrap_or_default(),
+            notes: row.get(6)?,
+            source_url: row.get(7)?,
+            page_count: row.get(8)?,
+            extracted_at: row.get(9)?,
+            created_at: row.get(10)?,
+            updated_at: row.get(11)?,
+        })
+    }
+
+    pub fn display_title(&self) -> &str {
+        self.title
+            .as_deref()
+            .filter(|t| !t.trim().is_empty())
+            .unwrap_or(&self.filename)
     }
 }

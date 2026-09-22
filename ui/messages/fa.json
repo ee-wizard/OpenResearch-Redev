@@ -232,6 +232,7 @@
   "new_project_form_paper": "مقاله",
   "new_project_form_project_location": "محل پروژه",
   "new_project_form_project_name": "نام پروژه",
+  "new_project_form_non_ascii_name_hint": "Non-ASCII characters (e.g. Chinese) will be removed from the GitHub repository name. Consider using an ASCII-only name.",
   "new_project_form_search_for_a_paper_by_ar_xiv_id": "جست‌وجوی مقاله با شناسهٔ arXiv، نشانی یا عنوان",
   "new_project_form_sync_experiments_to_git_hub": "همگام‌سازی آزمایش‌ها با GitHub",
   "new_project_form_that_folder_no_longer_exists_choose_it_again": "آن پوشه دیگر وجود ندارد. دوباره انتخابش کنید.",

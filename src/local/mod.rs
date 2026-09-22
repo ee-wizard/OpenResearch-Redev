@@ -43,6 +43,7 @@ pub mod ssh;
 pub mod ssh_identity;
 pub mod starter;
 pub mod storage;
+pub mod team_papers;
 pub mod user_skills;
 
 use crate::error::{anyhow, Result};
@@ -62,6 +63,9 @@ pub fn local_run(store: &Store, run_id: &str) -> Result<Option<StoredRun>> {
 }
 
 /// Lowercased, dash-separated slug from free text (branch- and URL-safe).
+/// Only ASCII alphanumeric characters are kept — GitHub repo names strip
+/// non-ASCII characters server-side, so keeping them here would produce a
+/// slug that doesn't match the actual repo name.
 pub fn slugify(text: &str) -> String {
     let mut out = String::new();
     for c in text.chars().flat_map(char::to_lowercase) {

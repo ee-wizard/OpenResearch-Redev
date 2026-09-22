@@ -39,6 +39,7 @@ pub mod projects;
 pub mod remote_host;
 pub mod runs;
 pub mod serve;
+pub mod shutdown;
 pub mod skill;
 pub mod ssh_key;
 pub mod supervise;

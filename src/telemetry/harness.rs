@@ -1,7 +1,14 @@
 use super::*;
 use serde_json::Value;
 
-pub(crate) const IDS: [&str; 5] = ["claude-code", "codex", "opencode", "cursor", "antigravity"];
+pub(crate) const IDS: [&str; 6] = [
+    "claude-code",
+    "codex",
+    "opencode",
+    "cursor",
+    "antigravity",
+    "oh-my-pi",
+];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct InitialSnapshot {

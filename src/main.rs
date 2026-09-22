@@ -43,10 +43,14 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
     disable_help_subcommand = true
 )]
 struct Cli {
-    // Optional so a bare `orx` prints USAGE to stdout and exits 0 (like the TS
-    // `if (!command) { console.log(USAGE); return; }`) instead of clap's exit-2.
+    // Optional so a bare `orx` starts the dashboard by default. The previous
+    // "print USAGE" behavior is still reachable via `orx --help`.
     #[command(subcommand)]
     command: Option<Command>,
+
+    /// Stop a running local `orx up` dashboard.
+    #[arg(long)]
+    shutdown: bool,
 
     /// Disable anonymous usage analytics for this run. To disable it
     /// persistently, run `orx telemetry off`.
@@ -171,6 +175,140 @@ enum Command {
     /// Internal: manage a persistent SSH remote host.
     #[command(name = "remote-host", hide = true)]
     RemoteHost(RemoteHostArgs),
+}
+
+fn default_up_args() -> UpArgs {
+    UpArgs {
+        port: 4791,
+        remote: None,
+        no_browser: false,
+        no_agent: false,
+        model: None,
+        lan: true,
+        lan_port: 4792,
+        remote_host: false,
+    }
+}
+
+fn background_log_path() -> std::path::PathBuf {
+    std::env::temp_dir().join("orx.log")
+}
+
+#[cfg(unix)]
+fn redirect_to_log(path: &std::path::Path) -> std::io::Result<()> {
+    use std::fs::OpenOptions;
+    use std::os::fd::AsRawFd;
+
+    let file = OpenOptions::new().create(true).append(true).open(path)?;
+    let fd = file.as_raw_fd();
+    unsafe {
+        libc::dup2(fd, libc::STDOUT_FILENO);
+        libc::dup2(fd, libc::STDERR_FILENO);
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn redirect_to_log(_path: &std::path::Path) -> std::io::Result<()> {
+    Ok(())
+}
+
+fn start_background_orx() -> ! {
+    let log_path = background_log_path();
+    match start_background_orx_inner(&log_path) {
+        Ok(urls) => {
+            for url in urls {
+                println!("{url}");
+            }
+            std::process::exit(0);
+        }
+        Err(err) => {
+            eprintln!("orx: {err}");
+            eprintln!("orx: check logs at {}", log_path.display());
+            std::process::exit(1);
+        }
+    }
+}
+
+fn start_background_orx_inner(log_path: &std::path::Path) -> Result<Vec<String>, String> {
+    #[cfg(unix)]
+    use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
+
+    let exe = std::env::current_exe().map_err(|e| format!("could not find executable: {e}"))?;
+    std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(log_path)
+        .map_err(|e| format!("could not create log file: {e}"))?;
+
+    let mut cmd = Command::new(exe);
+    cmd.args(["up", "--lan", "--no-browser"])
+        .env("ORX_BACKGROUND", "1")
+        .env("ORX_LOG_FILE", log_path.as_os_str())
+        .stdin(Stdio::null());
+
+    #[cfg(unix)]
+    unsafe {
+        cmd.pre_exec(|| {
+            libc::signal(libc::SIGHUP, libc::SIG_IGN);
+            let _ = libc::setsid();
+            Ok(())
+        });
+    }
+
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("could not spawn background process: {e}"))?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let mut urls = Vec::new();
+    let mut last_count = 0;
+    let mut last_change = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let content = std::fs::read_to_string(log_path).unwrap_or_default();
+                if content.contains("already running")
+                    || content.contains("Address already in use")
+                    || content.contains("Could not bind")
+                {
+                    return Err("orx is already running".into());
+                }
+                let status_text = status
+                    .code()
+                    .map(|c| format!("exit code {c}"))
+                    .unwrap_or_else(|| "exited by signal".into());
+                return Err(format!("background process exited with {status_text}"));
+            }
+            Ok(None) => {}
+            Err(e) => return Err(format!("could not poll child: {e}")),
+        }
+        if let Ok(content) = std::fs::read_to_string(log_path) {
+            urls = content
+                .lines()
+                .filter(|l| l.starts_with("http://"))
+                .map(String::from)
+                .collect();
+            if urls.len() != last_count {
+                last_count = urls.len();
+                last_change = std::time::Instant::now();
+            }
+            if !urls.is_empty() && last_change.elapsed() >= std::time::Duration::from_millis(800) {
+                return Ok(urls);
+            }
+            if content.contains("already running") {
+                return Err("orx is already running".into());
+            }
+        }
+        if std::time::Instant::now() > deadline {
+            if urls.is_empty() {
+                return Err("timed out waiting for orx to start".into());
+            }
+            return Ok(urls);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
 }
 
 #[derive(Args, Debug)]
@@ -569,6 +707,14 @@ pub struct UpArgs {
     /// opencode model override, e.g. `anthropic/claude-sonnet-4-5`.
     #[arg(long)]
     pub model: Option<String>,
+    /// Also expose the dashboard on the LAN via a local proxy on --lan-port.
+    /// The bare `orx` command enables this by default.
+    #[arg(long)]
+    pub lan: bool,
+    /// Port for the LAN proxy (default 4792). Passing a non-default value
+    /// implies --lan.
+    #[arg(long, default_value_t = 4792)]
+    pub lan_port: u16,
     /// Internal persistent dashboard/agent-host mode.
     #[arg(long, hide = true)]
     pub remote_host: bool,
@@ -807,6 +953,13 @@ pub struct PaperArgs {
 // worker threads. A `current_thread` flavor would deadlock. See commands::app.
 #[tokio::main]
 async fn main() {
+    // Background child: send all output to the log file before anything else prints.
+    if std::env::var("ORX_BACKGROUND").is_ok() {
+        if let Ok(log_file) = std::env::var("ORX_LOG_FILE") {
+            let _ = redirect_to_log(std::path::Path::new(&log_file));
+        }
+    }
+
     #[cfg(windows)]
     {
         install_panic_reporter();
@@ -828,16 +981,25 @@ async fn main() {
     }
 
     let mut cli = Cli::parse();
+    if cli.shutdown {
+        if let Err(err) = commands::shutdown::run().await {
+            eprintln!("orx shutdown: {err}");
+            std::process::exit(1);
+        }
+        return;
+    }
+    // Bare `orx` in a terminal (not Explorer double-click): start a detached
+    // background server and print the access URLs.
+    if cli.command.is_none() && !owns_its_console() {
+        start_background_orx();
+    }
     // Double-clicked from Explorer: start the dashboard, as the macOS .app does.
     if cli.command.is_none() && owns_its_console() {
         cli.command = Cli::parse_from(["orx", "up"]).command;
     }
-    let Some(command) = cli.command else {
-        // Bare `orx`: print the command overview to stdout and exit 0.
-        use clap::CommandFactory;
-        Cli::command().print_help().ok();
-        return;
-    };
+    let command = cli
+        .command
+        .unwrap_or_else(|| Command::Up(default_up_args()));
     // Outdated-version warning (skipped for the commands that manage updates
     // themselves). `start` prints the cached warning to stderr *now*,
     // before the command runs, so it shows even for commands that

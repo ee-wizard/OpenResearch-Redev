@@ -50,6 +50,7 @@ mod tests {
             github_sync_enabled: true,
             baseline_branch: "main".to_string(),
             repo_path: "/tmp/repo".to_string(),
+            project_dir: "/tmp/repo".to_string(),
             run_command: None,
             paper_id: None,
             created_at: now,

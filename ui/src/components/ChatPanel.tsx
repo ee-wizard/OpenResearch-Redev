@@ -208,6 +208,19 @@ interface SelectionAction {
   top: number;
 }
 
+/** `crypto.randomUUID()` requires a secure context (HTTPS or localhost).
+ *  When the dashboard is served over plain HTTP on a LAN IP, fall back to a
+ *  manual UUID v4 so the send button doesn't crash. */
+function randomUUID(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    return (c === "x" ? r : (r & 0x3) | 0x8).toString(16);
+  });
+}
+
 function elementForNode(node: Node): Element | null {
   return node instanceof Element ? node : node.parentElement;
 }
@@ -5287,7 +5300,7 @@ export function ChatPanel({
     });
     const clientTurnId = pendingClientTurn.current?.signature === turnSignature
       ? pendingClientTurn.current.id
-      : `ct_${crypto.randomUUID()}`;
+      : `ct_${randomUUID()}`;
     pendingClientTurn.current = { signature: turnSignature, id: clientTurnId };
     if (busy) {
       // A turn is already running. Steering hands the message to it now, and

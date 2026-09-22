@@ -38,6 +38,7 @@ use crate::local;
 use crate::local::chat::ChatHost;
 use crate::local::is_terminal;
 use crate::local::opencode::AgentHost;
+use crate::local::team_papers::{self, CreateTeamPaperReq};
 use crate::store::{
     log_path, now_ms, SshHostTest, Store, StoredAgentSelection, StoredChatSession, StoredRun,
 };
@@ -47,7 +48,184 @@ use crate::{browser, UpArgs};
 
 mod harness_setup;
 
+const LAN_PROXY_JS: &str = include_str!("../../scripts/lan-proxy.cjs");
+
+fn write_lan_proxy_script() -> Result<std::path::PathBuf> {
+    let dir = dirs::home_dir()
+        .ok_or_else(|| anyhow!("no home directory"))?
+        .join(".openresearch");
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join(".lan-proxy.cjs");
+    std::fs::write(&path, LAN_PROXY_JS)?;
+    Ok(path)
+}
+
+fn lan_enabled(args: &UpArgs) -> bool {
+    args.lan || args.lan_port != 4792
+}
+
+async fn start_lan_proxy(backend_port: u16, lan_port: u16) -> Result<tokio::process::Child> {
+    let script = write_lan_proxy_script()?;
+    let mut cmd = tokio::process::Command::new("node");
+    cmd.arg(&script)
+        .env("BACKEND_PORT", backend_port.to_string())
+        .env("PROXY_PORT", lan_port.to_string())
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true);
+    Ok(cmd.spawn()?)
+}
+
+fn ip_of_interface(iface: &str) -> Option<String> {
+    let output = std::process::Command::new("ip")
+        .args(["-4", "-o", "addr", "show", iface])
+        .output()
+        .ok()?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let line = stdout.lines().next()?;
+    let parts: Vec<_> = line.split_whitespace().collect();
+    if parts.len() >= 4 {
+        return parts[3].split('/').next().map(|s| s.to_string());
+    }
+    None
+}
+
+fn wsl_default_ip() -> Option<String> {
+    let output = std::process::Command::new("ip")
+        .args(["route", "show", "default"])
+        .output()
+        .ok()?;
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        let mut dev_seen = false;
+        for word in line.split_whitespace() {
+            if dev_seen {
+                return ip_of_interface(word);
+            }
+            if word == "dev" {
+                dev_seen = true;
+            }
+        }
+    }
+    None
+}
+
+fn local_non_loopback_ip() -> Option<String> {
+    let output = std::process::Command::new("ip")
+        .args(["-4", "-o", "addr", "show", "scope", "global"])
+        .output()
+        .ok()?;
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        let parts: Vec<_> = line.split_whitespace().collect();
+        if parts.len() >= 4 {
+            let ip = parts[2].split('/').next().unwrap_or(parts[2]);
+            if ip != "127.0.0.1" && !ip.starts_with("169.254.") {
+                return Some(ip.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn is_wsl() -> bool {
+    std::env::var("WSL_DISTRO_NAME").is_ok()
+        || std::path::Path::new("/proc/sys/fs/binfmt_misc/WSLInterop").exists()
+}
+
+fn windows_default_ip() -> Option<String> {
+    let output = std::process::Command::new("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-Command",
+            "Get-NetRoute -DestinationPrefix 0.0.0.0/0 | Sort-Object RouteMetric | Select-Object -First 1 -ExpandProperty InterfaceIndex | ForEach-Object { (Get-NetIPAddress -InterfaceIndex $_ -AddressFamily IPv4).IPAddress }",
+        ])
+        .output()
+        .ok()?;
+    let ip = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .next()?
+        .trim()
+        .to_string();
+    if ip.is_empty() {
+        return None;
+    }
+    Some(ip)
+}
+
+fn lan_host_ip() -> Option<String> {
+    windows_default_ip()
+        .or_else(wsl_default_ip)
+        .or_else(local_non_loopback_ip)
+}
+
+fn ensure_windows_lan_forwarding(lan_port: u16, wsl_ip: &str, windows_ip: &str) {
+    if wsl_ip == windows_ip {
+        return;
+    }
+    let port = lan_port.to_string();
+    let _ = std::process::Command::new("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-Command",
+            &format!(
+                "netsh interface portproxy delete v4tov4 listenport={} listenaddress=0.0.0.0; \
+                 netsh interface portproxy add v4tov4 listenport={} listenaddress=0.0.0.0 connectport={} connectaddress={}",
+                port, port, port, wsl_ip
+            ),
+        ])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+}
+
+fn ensure_windows_firewall(lan_port: u16) {
+    let port = lan_port.to_string();
+    let _ = std::process::Command::new("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-Command",
+            &format!(
+                "if (-not (Get-NetFirewallRule -DisplayName 'orx-lan-{}' -ErrorAction SilentlyContinue)) {{ \
+                 New-NetFirewallRule -DisplayName 'orx-lan-{}' -Direction Inbound -Protocol TCP -LocalPort {} -Action Allow -Profile Any }}",
+                port, port, port
+            ),
+        ])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+}
+
+fn print_access_urls(local_port: u16, lan_port: u16, lan: bool) {
+    println!("http://127.0.0.1:{}", local_port);
+    if lan {
+        if let Some(host) = lan_host_ip() {
+            println!("http://{}:{}", host, lan_port);
+        }
+    }
+}
+
+struct UpPidGuard(std::path::PathBuf);
+
+impl UpPidGuard {
+    fn new() -> Result<Self> {
+        let dir = dirs::home_dir()
+            .ok_or_else(|| anyhow!("no home directory"))?
+            .join(".openresearch");
+        std::fs::create_dir_all(&dir)?;
+        let path = dir.join("orx-up.pid");
+        std::fs::write(&path, format!("{}\n", std::process::id()))?;
+        Ok(Self(path))
+    }
+}
+
+impl Drop for UpPidGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
 pub async fn run(args: UpArgs) -> Result<()> {
+    let _pid_guard = UpPidGuard::new()?;
     let port = args.port;
     let persistent_host = args.remote_host;
     let remote_auth = if persistent_host {
@@ -189,10 +367,28 @@ pub async fn run(args: UpArgs) -> Result<()> {
     // In an SSH session the loopback URL only works on the remote box and there's
     // no local browser to open — print forwarding guidance instead of the bare
     // URL, and skip the (futile) browser-open. Otherwise, today's local flow.
+    let mut lan_proxy: Option<tokio::process::Child> = None;
     if let Some(session) = crate::remote::detect_ssh_session() {
         eprint!("{}", session.instructions(actual_port));
     } else {
-        eprintln!("orx up: dashboard on {url}");
+        let lan = args.remote.is_none() && !persistent_host && lan_enabled(&args);
+        if lan {
+            match start_lan_proxy(actual_port, args.lan_port).await {
+                Ok(child) => lan_proxy = Some(child),
+                Err(err) => {
+                    eprintln!("orx up: warning: could not start LAN proxy: {err}");
+                }
+            }
+        }
+        if is_wsl() {
+            let wsl_ip = wsl_default_ip();
+            let windows_ip = windows_default_ip();
+            if let (Some(wsl), Some(win)) = (&wsl_ip, &windows_ip) {
+                ensure_windows_lan_forwarding(args.lan_port, wsl, win);
+                ensure_windows_firewall(args.lan_port);
+            }
+        }
+        print_access_urls(actual_port, args.lan_port, lan);
         if let Some(warning) = crate::local::bash::missing_toolchain() {
             eprintln!("orx up: warning: {warning}");
         }
@@ -200,6 +396,7 @@ pub async fn run(args: UpArgs) -> Result<()> {
             browser::open_browser(&url);
         }
     }
+    let _lan_proxy = lan_proxy;
 
     // select! instead of graceful shutdown: open SSE streams never complete,
     // so waiting on connections would hang Ctrl-C forever.
@@ -465,6 +662,20 @@ fn router(state: AppState, remote_auth: Option<RemoteAuth>) -> Router {
         )
         .route("/api/github/repo-access", get(github_repo_access))
         .route("/api/projects/{id}/experiments", get(list_experiments))
+        .route(
+            "/api/projects/{id}/team-papers",
+            get(list_team_papers).post(create_team_paper),
+        )
+        .route(
+            "/api/projects/{id}/team-papers/{paperId}",
+            get(get_team_paper)
+                .patch(update_team_paper)
+                .delete(delete_team_paper),
+        )
+        .route(
+            "/api/projects/{id}/team-papers/{paperId}/text",
+            get(get_team_paper_text),
+        )
         .route("/api/projects/{id}/runs", get(list_project_runs))
         .route("/api/papers/search", get(search_papers_api))
         .route("/api/papers/resolve", get(resolve_paper_api))
@@ -1328,6 +1539,8 @@ struct CreateProjectReq {
     creation_mode: Option<crate::telemetry::ProjectCreationMode>,
     name: String,
     path: String,
+    /// Optional user-visible project folder. Defaults to `path`.
+    project_dir: Option<String>,
     run_command: Option<String>,
     paper_id: Option<String>,
     clone_url: Option<String>,
@@ -1356,6 +1569,8 @@ async fn create_project(
     if name.is_empty() {
         return Err(bad_request("name is required"));
     }
+    // GitHub repo names are ASCII-only; warn when the name will be mangled.
+    let name_has_non_ascii = name.chars().any(|c| !c.is_ascii());
     let locale = req.locale.unwrap_or_else(|| "en".to_string());
     let path = req.path;
     let create_folder = req.create_folder;
@@ -1388,6 +1603,7 @@ async fn create_project(
     let creation_guard = state.project_creation_lock.lock().await;
     let result = tokio::task::spawn_blocking(move || -> Result<local::model::LocalProject> {
         let store = Store::open()?;
+        let project_dir = req.project_dir.filter(|p| !p.trim().is_empty());
         let project = local::projects::create_project(
             &store,
             &name,
@@ -1398,6 +1614,7 @@ async fn create_project(
                 initialize_git,
                 clone_url,
                 shallow_clone,
+                project_dir,
                 run_command,
                 paper_id,
                 paper_pdf,
@@ -1434,6 +1651,7 @@ async fn create_project(
     Ok(Json(json!({
         "project": project_json(&project),
         "githubPublicationError": github_publication_error,
+        "nameHasNonAscii": name_has_non_ascii,
     })))
 }
 
@@ -1480,6 +1698,7 @@ fn project_git_json(
     });
     json!({
         "path": project.repo_path,
+        "projectDir": project.project_dir,
         "gitVersion": local::git::version(),
         "initialized": initialized,
         "baselineBranch": project.baseline_branch,
@@ -1812,7 +2031,13 @@ async fn update_project(
         if name.trim().is_empty() {
             return Err(bad_request("name cannot be empty"));
         }
-        project.name = name.trim().to_string();
+        let name = name.trim().to_string();
+        if name.chars().any(|c| !c.is_ascii()) {
+            return Err(bad_request(
+                "Project names with non-ASCII characters (e.g. Chinese) produce GitHub repository names that lose those characters. Use an ASCII-only name."
+            ));
+        }
+        project.name = name;
     }
     if let Some(cmd) = req.run_command {
         project.run_command = cmd.filter(|c| !c.trim().is_empty());
@@ -1884,7 +2109,19 @@ async fn delete_project(State(state): State<AppState>, Path(id): Path<String>) -
         state.chat.codex.kill_session(&session.id).await;
         state.chat.claude.forget_session(&session.id).await;
     }
+    // Delete the GitHub repo before the local row goes away — after
+    // `delete_local_project` the owner/repo strings are gone, so capture
+    // them first. Non-fatal: a failed remote delete shouldn't block local
+    // cleanup (the user can always delete the repo manually on GitHub).
+    let github_repo = project
+        .has_github_repository()
+        .then(|| (project.github_owner.clone(), project.github_repo.clone()));
     store.delete_local_project(&id)?;
+    if let Some((owner, repo)) = github_repo {
+        if let Err(err) = local::github::delete_project_repo(&owner, &repo).await {
+            eprintln!("orx up: could not delete GitHub repo {owner}/{repo}: {err}");
+        }
+    }
     for session in &sessions {
         local::chat::cleanup_session_transcript_artifacts(&session.id);
         local::chat::cleanup_session_worktree(&project, &session.id);
@@ -1899,6 +2136,140 @@ async fn list_experiments(Path(id): Path<String>) -> ApiResult {
         .ok_or_else(|| not_found("project"))?;
     let experiments = store.list_experiments_by_project(&id)?;
     Ok(Json(json!({ "experiments": experiments })))
+}
+
+async fn list_team_papers(Path(id): Path<String>) -> ApiResult {
+    let store = Store::open()?;
+    store
+        .get_local_project(&id)?
+        .ok_or_else(|| not_found("project"))?;
+    let papers = store.list_team_papers(&id)?;
+    Ok(Json(json!({ "papers": papers })))
+}
+
+async fn create_team_paper(
+    Path(id): Path<String>,
+    Json(req): Json<CreateTeamPaperReq>,
+) -> ApiResult {
+    let store = Store::open()?;
+    let project = store
+        .get_local_project(&id)?
+        .ok_or_else(|| not_found("project"))?;
+    let paper =
+        tokio::task::spawn_blocking(move || team_papers::save_team_paper(&store, &project, req))
+            .await
+            .map_err(|e| ApiError::from(anyhow!("team paper task failed: {e}")))?
+            .map_err(bad_request)?;
+    Ok(Json(json!({ "paper": paper })))
+}
+
+fn team_paper_json(paper: &local::model::TeamPaper) -> Value {
+    serde_json::to_value(paper).unwrap_or_else(|_| json!({ "id": paper.id }))
+}
+
+async fn get_team_paper(Path((id, paper_id)): Path<(String, String)>) -> ApiResult {
+    let store = Store::open()?;
+    store
+        .get_local_project(&id)?
+        .ok_or_else(|| not_found("project"))?;
+    let paper = store
+        .get_team_paper(&paper_id)?
+        .filter(|p| p.project_id == id)
+        .ok_or_else(|| not_found("paper"))?;
+    Ok(Json(json!({ "paper": team_paper_json(&paper) })))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateTeamPaperReq {
+    filename: Option<String>,
+    #[serde(default, deserialize_with = "double_option")]
+    title: Option<Option<String>>,
+    authors: Option<Vec<String>>,
+    tags: Option<Vec<String>>,
+    #[serde(default, deserialize_with = "double_option")]
+    notes: Option<Option<String>>,
+    #[serde(default, deserialize_with = "double_option")]
+    source_url: Option<Option<String>>,
+    page_count: Option<i64>,
+}
+
+async fn update_team_paper(
+    Path((id, paper_id)): Path<(String, String)>,
+    Json(req): Json<UpdateTeamPaperReq>,
+) -> ApiResult {
+    let store = Store::open()?;
+    store
+        .get_local_project(&id)?
+        .ok_or_else(|| not_found("project"))?;
+    let mut paper = store
+        .get_team_paper(&paper_id)?
+        .filter(|p| p.project_id == id)
+        .ok_or_else(|| not_found("paper"))?;
+
+    if let Some(filename) = req.filename {
+        let filename = filename.trim().to_string();
+        if filename.is_empty() {
+            return Err(bad_request("filename cannot be empty"));
+        }
+        paper.filename = filename;
+    }
+    if let Some(title) = req.title {
+        paper.title = title.filter(|t| !t.trim().is_empty());
+    }
+    if let Some(authors) = req.authors {
+        paper.authors = authors;
+    }
+    if let Some(tags) = req.tags {
+        paper.tags = tags;
+    }
+    if let Some(notes) = req.notes {
+        paper.notes = notes.filter(|n| !n.trim().is_empty());
+    }
+    if let Some(source_url) = req.source_url {
+        paper.source_url = source_url.filter(|u| !u.trim().is_empty());
+    }
+    if let Some(page_count) = req.page_count {
+        paper.page_count = Some(page_count);
+    }
+
+    if !store.update_team_paper(&paper)? {
+        return Err(not_found("paper"));
+    }
+    Ok(Json(json!({ "paper": team_paper_json(&paper) })))
+}
+
+async fn delete_team_paper(Path((id, paper_id)): Path<(String, String)>) -> ApiResult {
+    let store = Store::open()?;
+    let project = store
+        .get_local_project(&id)?
+        .ok_or_else(|| not_found("project"))?;
+    store
+        .get_team_paper(&paper_id)?
+        .filter(|p| p.project_id == id)
+        .ok_or_else(|| not_found("paper"))?;
+    tokio::task::spawn_blocking(move || {
+        team_papers::delete_team_paper(&store, &project, &paper_id)
+    })
+    .await
+    .map_err(|e| ApiError::from(anyhow!("team paper delete task failed: {e}")))??;
+    Ok(Json(json!({ "ok": true })))
+}
+
+async fn get_team_paper_text(Path((id, paper_id)): Path<(String, String)>) -> ApiResult {
+    let store = Store::open()?;
+    let project = store
+        .get_local_project(&id)?
+        .ok_or_else(|| not_found("project"))?;
+    store
+        .get_team_paper(&paper_id)?
+        .filter(|p| p.project_id == id)
+        .ok_or_else(|| not_found("paper"))?;
+    let text = tokio::task::spawn_blocking(move || team_papers::read_text(&project, &paper_id))
+        .await
+        .map_err(|e| ApiError::from(anyhow!("team paper text task failed: {e}")))?
+        .map_err(bad_request)?;
+    Ok(Json(json!({ "text": text })))
 }
 
 async fn list_project_runs(Path(id): Path<String>) -> ApiResult {
@@ -8469,6 +8840,7 @@ mod tests {
             github_sync_enabled: true,
             baseline_branch: "main".into(),
             repo_path: "/tmp/r".into(),
+            project_dir: "/tmp/r".into(),
             run_command: None,
             paper_id: None,
             created_at: 0,

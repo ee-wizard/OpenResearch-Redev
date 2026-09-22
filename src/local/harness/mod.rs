@@ -22,6 +22,7 @@ pub(crate) mod claude;
 pub(crate) mod codex;
 pub(crate) mod cursor;
 mod detect;
+pub(crate) mod ohmy;
 pub(crate) mod opencode;
 mod options;
 mod plan_gate;
@@ -489,6 +490,7 @@ pub fn registry() -> Vec<Box<dyn Harness>> {
         Box::new(opencode::OpenCode),
         Box::new(cursor::Cursor),
         Box::new(antigravity::Antigravity),
+        Box::new(ohmy::OhMyPi),
     ]
 }
 
@@ -821,6 +823,23 @@ mod tests {
         assert_eq!(antigravity.plan_activation, Some(PlanActivation::Command));
         assert!(reasoning_ids(&antigravity).is_empty());
         assert!(antigravity.default_reasoning_level.is_none());
+
+        let ohmy = options_for("oh-my-pi");
+        assert_eq!(
+            permission_contract(&ohmy),
+            [
+                ("ask", "Ask", "Answer questions without changing files"),
+                ("auto", "Auto", "Auto-approve all tool calls"),
+                (
+                    "full-access",
+                    "Full access",
+                    "Auto-approve all tool calls (omp runs unsandboxed either way)"
+                ),
+            ]
+        );
+        assert_eq!(ohmy.default_permission_mode, Some("auto"));
+        assert_eq!(ohmy.plan_activation, Some(PlanActivation::Command));
+        assert!(ohmy.reasoning_levels.is_empty());
     }
 
     /// Every advertised permission-mode id must round-trip through

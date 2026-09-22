@@ -89,6 +89,8 @@ fn login_command(harness: &str) -> Option<(&'static str, Vec<String>)> {
         "opencode" => Some(("opencode auth login", vec!["auth".into(), "login".into()])),
         "antigravity" => Some(("agy", vec![])),
         "cursor" => Some(("agent login", vec!["login".into()])),
+        // omp has no login flow: auth is a provider API key the user exports
+        // or writes into ~/.omp/agent/models.yml. No command to offer.
         _ => None,
     }
 }
@@ -802,7 +804,13 @@ mod tests {
         // Bounded transient retries, with an explicit ceiling.
         assert!(script.contains("--retry 2") && script.contains("--max-time 300"));
         assert!(script.contains("trap 'rm -f \"$script\"' EXIT"));
-        for harness in crate::telemetry::harness::IDS {
+        // oh-my-pi has no vendor bootstrap script — it is distributed as a
+        // binary and authenticates with provider API keys, so it is excluded
+        // from the installer surface (and from these tables) deliberately.
+        for harness in crate::telemetry::harness::IDS
+            .into_iter()
+            .filter(|id| *id != "oh-my-pi")
+        {
             let (url, interpreter) = unix_bootstrap(harness).expect(harness);
             // The approved command must describe the one that runs: same URL,
             // same interpreter, and no pipeline we no longer use.
@@ -835,12 +843,19 @@ mod tests {
 
     #[test]
     fn setup_accepts_only_known_agents_and_actions() {
-        for harness in crate::telemetry::harness::IDS {
+        for harness in crate::telemetry::harness::IDS
+            .into_iter()
+            .filter(|id| *id != "oh-my-pi")
+        {
             assert!(install_command(harness, false).is_some());
             assert!(install_command(harness, true).is_some());
             assert!(login_command(harness).is_some());
             assert!(update_command(harness).is_some());
         }
+        // A harness without setup commands stays out of the setup surface.
+        assert!(install_command("oh-my-pi", false).is_none());
+        assert!(login_command("oh-my-pi").is_none());
+        assert!(update_command("oh-my-pi").is_none());
         assert!(install_command("codex; touch /tmp/injected", false).is_none());
         assert!(!install_command("codex", true).unwrap().starts_with("npm "));
         assert!(login_command("sh").is_none());

@@ -132,6 +132,7 @@ export function NewProjectForm({
   const previewQuery = useQuery({ ...githubProjectRepoPreviewQuery(previewName), enabled: previewName === name.trim() });
   const githubRepoName = previewName === name.trim() ? previewQuery.data?.repo ?? slugify(name, 48) : slugify(name, 48);
   const githubRepoPreviewPending = previewName !== name.trim() || previewQuery.isFetching;
+  const nameHasNonAscii = /[^\x00-\x7F]/.test(name);
   const accessQuery = useQuery({ ...repoAccessQuery(existingGithubRepo?.owner ?? "", existingGithubRepo?.repo ?? ""), enabled: Boolean(existingGithubRepo), subscribed: Boolean(existingGithubRepo) });
   const githubAccessPending = Boolean(existingGithubRepo) && accessQuery.isFetching;
   const writableGithubRepo = existingGithubRepo && accessQuery.data?.canPush ? `github.com/${existingGithubRepo.owner}/${existingGithubRepo.repo}` : null;
@@ -456,6 +457,11 @@ export function NewProjectForm({
                 }}
                 placeholder={m.new_project_form_my_research()}
               />
+              {nameHasNonAscii && (
+                <span className="project-path-notice block" role="note">
+                  {m.new_project_form_non_ascii_name_hint()}
+                </span>
+              )}
             </label>
           )}
           {mode === "paper" ? (
@@ -551,6 +557,11 @@ export function NewProjectForm({
                 }}
                 placeholder={m.new_project_form_my_research()}
               />
+              {nameHasNonAscii && (
+                <span className="project-path-notice block" role="note">
+                  {m.new_project_form_non_ascii_name_hint()}
+                </span>
+              )}
             </label>
           )}
           {gitMissing && (

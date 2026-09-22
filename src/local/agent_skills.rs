@@ -103,6 +103,7 @@ const EVIDENCE: &str = include_str!("../../agent-skills/orx-evidence/SKILL.md");
 const CUSTOMIZE: &str = include_str!("../../agent-skills/orx-customize/SKILL.md");
 const PAPER: &str = include_str!("../../agent-skills/orx-paper/SKILL.md");
 const INSTANCES: &str = include_str!("../../agent-skills/orx-instances/SKILL.md");
+const TEAM_PAPERS: &str = include_str!("../../agent-skills/orx-team-papers/SKILL.md");
 const FIGURES: &str = include_str!("../../agent-skills/orx-figures/SKILL.md");
 const FIGURES_RESOURCES: &[AgentSkillResource] = &[
     AgentSkillResource {
@@ -220,6 +221,12 @@ const S_INSTANCES: AgentSkill = AgentSkill {
     content: INSTANCES,
     resources: &[],
 };
+const S_TEAM_PAPERS: AgentSkill = AgentSkill {
+    name: "orx-team-papers",
+    description: "Read and reason about team papers uploaded to the project. Use when the user refers to a shared paper, asks to align research with team references, migrate a scheme or writing style, or mine prior team work for topics or innovations.",
+    content: TEAM_PAPERS,
+    resources: &[],
+};
 
 /// The modules for a given set, in a stable order. Full adds `create`; every
 /// shared module uses the same canonical `SKILL.md`.
@@ -235,6 +242,7 @@ pub fn skills(set: SkillSet) -> Vec<&'static AgentSkill> {
             &S_REPORTS,
             &S_FIGURES,
             &S_PAPER,
+            &S_TEAM_PAPERS,
             &S_CUSTOMIZE,
             &S_LIT,
         ],
@@ -249,6 +257,7 @@ pub fn skills(set: SkillSet) -> Vec<&'static AgentSkill> {
             &S_REPORTS,
             &S_FIGURES,
             &S_PAPER,
+            &S_TEAM_PAPERS,
             &S_CUSTOMIZE,
             &S_LIT,
         ],

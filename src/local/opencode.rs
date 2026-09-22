@@ -193,7 +193,7 @@ fn project_state_md(project: &LocalProject, state: &ProjectState) -> String {
     )
 }
 
-fn playbook_md(project: &LocalProject, state: &ProjectState) -> String {
+fn playbook_md(project: &LocalProject, state: &ProjectState, team_papers_line: &str) -> String {
     let id = &project.id;
     let name = &project.name;
     let publication_line = if project.github_enabled() {
@@ -251,6 +251,7 @@ fn playbook_md(project: &LocalProject, state: &ProjectState) -> String {
         .replace("{id}", id)
         .replace("{publication_line}", publication_line)
         .replace("{paper_line}", &paper_line)
+        .replace("{team_papers_line}", team_papers_line)
         .replace("{compute_bullet}", &compute_bullet)
         .replace("{artifacts}", &artifacts)
         .replace("{project_state}", &project_state)
@@ -322,9 +323,20 @@ pub fn ensure_playbook(
         std::fs::create_dir_all(parent)
             .map_err(|e| anyhow!("Could not create {}: {}", parent.display(), e))?;
     }
+    // Make team papers reachable from the session worktree when necessary.
+    super::team_papers::stage_into_worktree(project, &workdir)?;
     let project_state = ProjectState::load(&project.id)?;
-    std::fs::write(&playbook, playbook_md(project, &project_state))
-        .map_err(|e| anyhow!("Could not write {}: {}", playbook.display(), e))?;
+    let team_papers_line = match store::Store::open() {
+        Ok(store) => {
+            super::team_papers::playbook_line(project, &workdir, &store).unwrap_or_default()
+        }
+        Err(_) => String::new(),
+    };
+    std::fs::write(
+        &playbook,
+        playbook_md(project, &project_state, &team_papers_line),
+    )
+    .map_err(|e| anyhow!("Could not write {}: {}", playbook.display(), e))?;
     // Modular skills, written fresh beside the playbook (same freshness
     // semantics) so this session's agent discovers them natively.
     if let Some(dir) = session_skills_dir {
@@ -738,6 +750,7 @@ mod tests {
             github_sync_enabled: true,
             baseline_branch: "main".into(),
             repo_path: "/tmp/nonexistent".into(),
+            project_dir: "/tmp/nonexistent".into(),
             run_command: None,
             paper_id: None,
             created_at: 0,
@@ -746,7 +759,7 @@ mod tests {
     }
 
     fn sample_playbook() -> String {
-        playbook_md(&sample_project(), &ProjectState::default())
+        playbook_md(&sample_project(), &ProjectState::default(), "")
     }
 
     /// The playbook's runtime placeholders must all resolve.
@@ -816,7 +829,7 @@ mod tests {
         let mut project = sample_project();
         project.github_owner.clear();
         project.github_repo.clear();
-        let md = playbook_md(&project, &ProjectState::default());
+        let md = playbook_md(&project, &ProjectState::default(), "");
         assert!(md.contains("default target"));
         assert!(md.contains("orx-compute"));
         assert!(md.contains("orx-instances"));
@@ -844,7 +857,7 @@ mod tests {
 
         let mut project = sample_project();
         project.run_command = Some("python train.py".into());
-        let configured = playbook_md(&project, &ProjectState::default());
+        let configured = playbook_md(&project, &ProjectState::default(), "");
         assert!(
             configured.contains("experiment tree is empty and the fixed run command is configured")
         );
@@ -859,7 +872,7 @@ mod tests {
             runs: 18,
             active_runs: 1,
         };
-        let md = playbook_md(&project, &state);
+        let md = playbook_md(&project, &state, "");
         assert!(md.contains("**12 experiments**"));
         assert!(md.contains("**18 runs** (1 run active)"));
         assert!(md.contains("fixed run command is configured"));
@@ -923,7 +936,7 @@ mod tests {
 
         for md in [
             sample_playbook(),
-            playbook_md(&local_only, &ProjectState::default()),
+            playbook_md(&local_only, &ProjectState::default(), ""),
         ] {
             crate::local::assert_agent_guidance_is_ui_agnostic("playbook", &md);
         }

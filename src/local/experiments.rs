@@ -143,6 +143,7 @@ mod tests {
             github_sync_enabled: true,
             baseline_branch: base.into(),
             repo_path: "/tmp/r".into(),
+            project_dir: "/tmp/r".into(),
             run_command: None,
             paper_id: None,
             created_at: 0,

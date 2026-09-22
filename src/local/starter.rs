@@ -142,7 +142,14 @@ pub fn prewarm(name: String, paper_id: Option<String>, path: Option<String>, loc
                     if is_blank(paper_id.as_deref(), &files) {
                         return None;
                     }
-                    Some(brief_parts(&name, None, paper_id.as_deref(), &repo, &files))
+                    Some(brief_parts(
+                        &name,
+                        None,
+                        paper_id.as_deref(),
+                        &repo,
+                        &files,
+                        0,
+                    ))
                 }
                 None => {
                     let files = Vec::from_iter(paper_id.is_some().then(|| PAPER_PDF.to_string()));
@@ -152,6 +159,7 @@ pub fn prewarm(name: String, paper_id: Option<String>, path: Option<String>, loc
                         paper_id.as_deref(),
                         Path::new(""),
                         &files,
+                        0,
                     ))
                 }
             }
@@ -381,12 +389,17 @@ fn clip(text: &str, chars: usize) -> String {
 /// Everything local the model gets to read about the project, in a stable
 /// order (the fingerprint depends on it).
 fn brief(project: &LocalProject, files: &[String]) -> String {
+    let team_paper_count = crate::store::Store::open()
+        .and_then(|s| s.list_team_papers(&project.id))
+        .map(|papers| papers.len())
+        .unwrap_or(0);
     brief_parts(
         &project.name,
         project.run_command.as_deref(),
         project.paper_id.as_deref(),
         Path::new(&project.repo_path),
         files,
+        team_paper_count,
     )
 }
 
@@ -396,6 +409,7 @@ fn brief_parts(
     paper_id: Option<&str>,
     repo: &Path,
     files: &[String],
+    team_paper_count: usize,
 ) -> String {
     let mut out = String::new();
     push(&mut out, "Project name", name);
@@ -410,6 +424,15 @@ fn brief_parts(
             &mut out,
             "Note",
             "paper.pdf is checked into the project root.",
+        );
+    }
+    if team_paper_count > 0 {
+        push(
+            &mut out,
+            "Team papers",
+            &format!(
+                "{team_paper_count} team paper(s) are available under .openresearch/team-papers/."
+            ),
         );
     }
     if let Some(readme) = files
@@ -593,6 +616,7 @@ mod tests {
             github_sync_enabled: false,
             baseline_branch: "main".into(),
             repo_path: root.to_string_lossy().into_owned(),
+            project_dir: root.to_string_lossy().into_owned(),
             run_command: Some("python train.py --steps 10".into()),
             paper_id: None,
             created_at: 0,
@@ -728,6 +752,7 @@ mod tests {
             Some("2401.12345"),
             Path::new(""),
             &["paper.pdf".to_string()],
+            0,
         );
         assert_eq!(created, ahead);
         let _ = std::fs::remove_dir_all(root);
