@@ -1205,5 +1205,19 @@
   "prompt_gists_failed_to_load": "Failed to load prompt gists.",
   "prompt_gists_confirm_delete": "Delete this prompt gist? This cannot be undone.",
   "prompt_gists_name_required": "Name is required.",
-  "prompt_gists_content_required": "Content is required."
+  "prompt_gists_content_required": "Content is required.",
+  "library_title": "Library",
+  "library_description": "Edit built-in and team skills and agent shims. Changes here are used in every project session.",
+  "library_agents": "Agents",
+  "library_built_in": "Built-in",
+  "library_team": "Team",
+  "library_project": "Project",
+  "library_revert": "Revert",
+  "library_delete_confirm": "Delete “{name}” from the library? This cannot be undone.",
+  "library_create_skill": "Create skill",
+  "library_create_agent": "Create agent",
+  "library_name_placeholder": "Name (lowercase, dashes allowed)",
+  "library_content_placeholder": "Markdown content…",
+  "library_insert": "Insert skill or agent",
+  "library_empty": "No library items yet."
 }

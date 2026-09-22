@@ -371,9 +371,9 @@ impl Harness for OpenCode {
         )
     }
 
-    fn skill_shim(&self) -> Option<&'static str> {
+    fn skill_shim(&self) -> Option<std::borrow::Cow<'static, str>> {
         // OpenCode reads the same SKILL.md format as Claude Code.
-        Some(super::CLAUDE_SKILL)
+        Some(std::borrow::Cow::Owned(super::read_agent_shim(self.id())))
     }
 
     fn session_skills_dir(&self) -> Option<&'static str> {

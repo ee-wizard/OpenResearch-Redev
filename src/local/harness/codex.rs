@@ -824,19 +824,19 @@ impl Harness for Codex {
         )
     }
 
-    fn skill_shim(&self) -> Option<&'static str> {
+    fn skill_shim(&self) -> Option<std::borrow::Cow<'static, str>> {
         // Native SKILL.md format, same body as Claude Code / OpenCode / Cursor.
-        Some(super::CLAUDE_SKILL)
+        Some(std::borrow::Cow::Owned(super::read_agent_shim(self.id())))
     }
 
-    fn extra_skill_targets(&self) -> Vec<(PathBuf, &'static str)> {
+    fn extra_skill_targets(&self) -> Vec<(PathBuf, std::borrow::Cow<'static, str>)> {
         // Keep the legacy `/orx` prompt for codex versions that don't yet read
         // `~/.agents/skills/`.
         vec![(
             native_store::codex_home(NativeStore::Legacy)
                 .join("prompts")
                 .join("orx.md"),
-            super::CODEX_PROMPT,
+            std::borrow::Cow::Owned(super::read_codex_legacy_prompt()),
         )]
     }
 

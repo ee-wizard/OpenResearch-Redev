@@ -1782,6 +1782,64 @@ export const deletePromptGist = (id: string, projectId?: string) =>
     method: "DELETE",
   }).then((r) => json<{ ok: boolean }>(r));
 
+// --- team library ------------------------------------------------------------
+
+export type LibraryKind = "skill" | "agent";
+export type LibrarySource = "builtin" | "team" | "project";
+
+export interface LibraryItem {
+  id: string;
+  kind: LibraryKind;
+  name: string;
+  source: LibrarySource;
+  filePath: string;
+  editable: boolean;
+}
+
+export const listLibraryItems = (
+  kind?: LibraryKind,
+  source: LibrarySource = "team",
+  signal?: AbortSignal,
+) =>
+  get<{ items: LibraryItem[] }>(
+    `/api/library?${new URLSearchParams({
+      ...(kind ? { kind } : {}),
+      source,
+    })}`,
+    signal,
+  ).then((r) => r.items);
+
+export const getLibraryItem = (
+  kind: LibraryKind,
+  id: string,
+  source: LibrarySource = "team",
+  signal?: AbortSignal,
+) =>
+  get<{ item: LibraryItem; content: string }>(
+    `/api/library/${encodeURIComponent(kind)}/${encodeURIComponent(id)}?source=${encodeURIComponent(source)}`,
+    signal,
+  );
+
+export const createLibraryItem = (kind: LibraryKind, name: string, content: string) =>
+  post<{ item: LibraryItem }>(`/api/library/${encodeURIComponent(kind)}`, { name, content });
+
+export const updateLibraryItem = (
+  kind: LibraryKind,
+  id: string,
+  source: LibrarySource,
+  content: string,
+) =>
+  patch<{ path: string }>(
+    `/api/library/${encodeURIComponent(kind)}/${encodeURIComponent(id)}?source=${encodeURIComponent(source)}`,
+    { content },
+  );
+
+export const deleteLibraryItem = (kind: LibraryKind, id: string, source: LibrarySource = "team") =>
+  writeResponse(
+    `/api/library/${encodeURIComponent(kind)}/${encodeURIComponent(id)}?source=${encodeURIComponent(source)}`,
+    { method: "DELETE" },
+  ).then((r) => json<{ deleted: boolean }>(r));
+
 /** "openai/gpt-5.5" → "GPT 5.5", "anthropic/claude-opus-4-8" → "Opus 4.8". */
 export function modelLabel(id: string): string {
   const last = (id.split("/").pop() ?? id).replace(/^~/, "").replace(/^claude-/, "");

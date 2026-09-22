@@ -324,6 +324,20 @@ pub fn ensure_session_skills(worktree: &Path, skills_dir_rel: &str) -> Result<()
         }
         std::fs::create_dir_all(&dir)
             .map_err(|e| anyhow!("Could not create {}: {}", dir.display(), e))?;
+
+        // Prefer the editable library copy so team customizations reach sessions.
+        if let Some(lib_dir) = crate::local::library::builtin_skill_source_dir(skill.name) {
+            crate::local::user_skills::copy_dir_all(&lib_dir, &dir).map_err(|e| {
+                anyhow!(
+                    "Could not copy library skill {} to {}: {}",
+                    lib_dir.display(),
+                    dir.display(),
+                    e
+                )
+            })?;
+            continue;
+        }
+
         let path = dir.join("SKILL.md");
         std::fs::write(&path, skill.content)
             .map_err(|e| anyhow!("Could not write {}: {}", path.display(), e))?;

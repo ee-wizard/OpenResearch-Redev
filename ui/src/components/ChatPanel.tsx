@@ -147,6 +147,7 @@ import { LitSourcesList } from "./LitSourcesPicker";
 import { Md } from "./Md";
 import { PlanStrip } from "./PlanStrip";
 import { PromptGistPicker } from "./PromptGistsTab";
+import { LibraryPicker } from "./SkillsTab";
 import { SETTINGS_NAV, type SettingsTab } from "./SettingsPage";
 import { SkillMenu } from "./SkillMenu";
 import { ComposerSkillChips, MessageWithChips, skillMarginSpaces } from "./SkillChips";
@@ -5848,7 +5849,7 @@ export function ChatPanel({
           onClick={() => onSelectMainView("skills")}
         >
           <Blocks size={15} />
-          {m.chat_panel_customize()}
+          {m.library_title()}
         </button>
         {onOpenPromptGists && (
           <button
@@ -6538,6 +6539,14 @@ export function ChatPanel({
               </IconButton>
               <PromptGistPicker
                 projectId={projectId}
+                textareaRef={composerRef}
+                draft={draft}
+                onDraftChange={(text, cursor) => {
+                  setDraft(text);
+                  setComposerCursor(cursor);
+                }}
+              />
+              <LibraryPicker
                 textareaRef={composerRef}
                 draft={draft}
                 onDraftChange={(text, cursor) => {

@@ -1,22 +1,34 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 
 import { listUserSkillsQuery, listLatexTemplatesQuery } from "../queries/settings";
+import {
+  listLibraryItemsQuery,
+  getLibraryItemQuery,
+  useCreateLibraryItem,
+  useDeleteLibraryItem,
+  useUpdateLibraryItem,
+} from "../queries/library";
 import { m } from "../paraglide/messages.js";
 import { ltr } from "../i18n";
-import { RefreshCw, Trash2, Upload } from "lucide-react";
-import { useCallback, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { RefreshCw, Trash2, Upload, Bot, WandSparkles, FileText, Plus } from "lucide-react";
+import { useCallback, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import {
   deleteLatexTemplate,
   deleteUserSkill,
   fmtBytes,
   fmtNumber,
+  getLibraryItem,
   timeAgo,
   uploadLatexTemplate,
   uploadUserSkill,
   type LatexTemplate,
   type UserSkill,
+  type LibraryItem,
+  type LibraryKind,
+  type LibrarySource,
 } from "../api";
-import { Badge, Button, IconButton, Spinner } from "./ui";
+import { Badge, Button, IconButton, Input, Spinner } from "./ui";
+import { usePopover } from "./ModelPicker";
 
 const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
 
@@ -416,20 +428,395 @@ function LatexTemplatesCard() {
   );
 }
 
-/** Middle-pane Customize tab — what the agent brings to every session: the
- * skills it can invoke (uploaded here or mirrored from the user's coding
- * agents) and the LaTeX templates it writes papers into. Everything applies to
- * every project. */
-export function SkillsTab() {
+function sourceBadge(source: LibrarySource) {
+  switch (source) {
+    case "builtin":
+      return <Badge size="small">{m.library_built_in()}</Badge>;
+    case "team":
+      return (
+        <Badge size="small" variant="primary">
+          {m.library_team()}
+        </Badge>
+      );
+    case "project":
+      return <Badge size="small">{m.library_project()}</Badge>;
+  }
+}
+
+function kindIcon(kind: LibraryKind) {
+  return kind === "agent" ? <Bot size={15} /> : <WandSparkles size={15} />;
+}
+
+function LibraryEditor({
+  content,
+  onChange,
+  onSave,
+  onRevert,
+  busy,
+}: {
+  content: string;
+  onChange: (value: string) => void;
+  onSave: () => void;
+  onRevert: () => void;
+  busy: boolean;
+}) {
+  return (
+    <div className="mt-2 flex flex-col gap-2">
+      <textarea
+        value={content}
+        onChange={(e) => onChange(e.target.value)}
+        rows={12}
+        className="w-full rounded-md border border-border bg-background px-3 py-2 font-mono text-sm text-text focus:outline-none focus:ring-2 focus:ring-primary"
+      />
+      <div className="flex gap-2">
+        <Button size="small" variant="primary" onClick={onSave} disabled={busy}>
+          {m.common_save()}
+        </Button>
+        <Button size="small" onClick={onRevert} disabled={busy}>
+          {m.library_revert()}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function LibraryRow({
+  item,
+  onError,
+}: {
+  item: LibraryItem;
+  onError: (message: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const updateMutation = useUpdateLibraryItem();
+  const deleteMutation = useDeleteLibraryItem();
+  const contentQuery = useQuery(getLibraryItemQuery(item.kind, item.id, item.source));
+
+  const startEdit = useCallback(() => {
+    setDraft(contentQuery.data?.content ?? "");
+    setEditing(true);
+  }, [contentQuery.data]);
+
+  const save = useCallback(async () => {
+    try {
+      await updateMutation.mutateAsync({
+        kind: item.kind,
+        id: item.id,
+        source: item.source,
+        content: draft,
+      });
+      setEditing(false);
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    }
+  }, [item, draft, updateMutation, onError]);
+
+  const revert = useCallback(() => {
+    setDraft(contentQuery.data?.content ?? "");
+  }, [contentQuery.data]);
+
+  const remove = useCallback(async () => {
+    if (!window.confirm(m.library_delete_confirm({ name: ltr(item.name) }))) return;
+    try {
+      await deleteMutation.mutateAsync({
+        kind: item.kind,
+        id: item.id,
+        source: item.source,
+      });
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    }
+  }, [item, deleteMutation, onError]);
+
+  return (
+    <div className={SKILL_ROW_CLASS_NAME}>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2">
+          {kindIcon(item.kind)}
+          <span className="text-base font-medium text-text">{item.name}</span>
+          {sourceBadge(item.source)}
+        </div>
+        <p className={ROW_DETAIL_CLASS_NAME}>{item.filePath}</p>
+        {editing && (
+          <LibraryEditor
+            content={draft}
+            onChange={setDraft}
+            onSave={save}
+            onRevert={revert}
+            busy={updateMutation.isPending}
+          />
+        )}
+      </div>
+      <div className="shrink-0 flex items-center gap-1">
+        <IconButton
+          size="small"
+          data-tip={m.prompt_gists_edit()}
+          aria-label={m.prompt_gists_edit()}
+          onClick={startEdit}
+          disabled={editing}
+        >
+          <FileText size={13} />
+        </IconButton>
+        {item.source === "team" && (
+          <IconButton
+            size="small"
+            data-tip={m.prompt_gists_delete()}
+            aria-label={m.prompt_gists_delete()}
+            onClick={remove}
+            disabled={deleteMutation.isPending}
+          >
+            <Trash2 size={13} />
+          </IconButton>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function LibraryCreateRow({
+  kind,
+  onDone,
+  onError,
+}: {
+  kind: LibraryKind;
+  onDone: () => void;
+  onError: (message: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [content, setContent] = useState("");
+  const createMutation = useCreateLibraryItem();
+
+  const submit = useCallback(async () => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    try {
+      await createMutation.mutateAsync({ kind, name: trimmed, content });
+      setName("");
+      setContent("");
+      setOpen(false);
+      onDone();
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    }
+  }, [kind, name, content, createMutation, onDone, onError]);
+
+  if (!open) {
+    return (
+      <Button size="small" variant="ghost" onClick={() => setOpen(true)}>
+        <Plus size={13} className="me-1" />
+        {kind === "agent" ? m.library_create_agent() : m.library_create_skill()}
+      </Button>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-2 py-2">
+      <Input
+        value={name}
+        onChange={(e) => setName(e.currentTarget.value)}
+        placeholder={m.library_name_placeholder()}
+      />
+      <textarea
+        value={content}
+        onChange={(e) => setContent(e.target.value)}
+        rows={10}
+        placeholder={m.library_content_placeholder()}
+        className="w-full rounded-md border border-border bg-background px-3 py-2 font-mono text-sm text-text focus:outline-none focus:ring-2 focus:ring-primary"
+      />
+      <div className="flex gap-2">
+        <Button size="small" variant="primary" onClick={submit} disabled={createMutation.isPending}>
+          {m.prompt_gists_create()}
+        </Button>
+        <Button size="small" onClick={() => setOpen(false)} disabled={createMutation.isPending}>
+          {m.prompt_gists_cancel()}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function LibrarySection({
+  kind,
+  title,
+}: {
+  kind: LibraryKind;
+  title: string;
+}) {
+  const [error, setError] = useState<string | null>(null);
+  const builtinQuery = useQuery(listLibraryItemsQuery(kind, "builtin"));
+  const teamQuery = useQuery(listLibraryItemsQuery(kind, "team"));
+  const items = [...(builtinQuery.data ?? []), ...(teamQuery.data ?? [])];
+  const loading = builtinQuery.isPending || teamQuery.isPending;
+  const loadError = builtinQuery.error?.message ?? teamQuery.error?.message;
+
+  return (
+    <section className={CARD_CLASS_NAME}>
+      <div className="flex items-baseline gap-2.5">
+        <h3>{title}</h3>
+        <Button
+          className="ms-auto"
+          size="small"
+          onClick={() => {
+            void builtinQuery.refetch();
+            void teamQuery.refetch();
+          }}
+          disabled={loading}
+        >
+          <RefreshCw size={12} className={loading ? "animate-[spin_0.9s_linear_infinite]" : ""} />{" "}
+          {m.settings_page_refresh()}
+        </Button>
+      </div>
+      {error && (
+        <div role="alert" className="mt-2.5 text-base text-accent-red whitespace-pre-wrap">
+          {error}
+        </div>
+      )}
+      {loadError && (
+        <div role="alert" className="pt-3 text-base text-accent-red">
+          {m.common_failed_to_load({ error: loadError })}
+        </div>
+      )}
+      {loading ? (
+        <div className="flex items-center gap-2 pt-3 text-sm text-subtext">
+          <Spinner /> {m.common_loading()}
+        </div>
+      ) : items.length === 0 ? (
+        <div className="pt-3 text-sm text-subtext">{m.library_empty()}</div>
+      ) : (
+        <div className="flex flex-col mt-1">
+          {items.map((item) => (
+            <LibraryRow key={`${item.kind}-${item.id}-${item.source}`} item={item} onError={setError} />
+          ))}
+        </div>
+      )}
+      <LibraryCreateRow kind={kind} onDone={() => { void teamQuery.refetch(); }} onError={setError} />
+    </section>
+  );
+}
+
+/** Composer picker that inserts a skill's content or an agent marker. */
+export function LibraryPicker({
+  textareaRef,
+  draft,
+  onDraftChange,
+}: {
+  textareaRef: RefObject<HTMLTextAreaElement | null>;
+  draft: string;
+  onDraftChange: (text: string, cursor: number) => void;
+}) {
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const { open, setOpen, ref } = usePopover(triggerRef);
+  const skillsQuery = useQuery(listLibraryItemsQuery("skill"));
+  const agentsQuery = useQuery(listLibraryItemsQuery("agent"));
+  const skills = skillsQuery.data ?? [];
+  const agents = agentsQuery.data ?? [];
+
+  const insert = useCallback(
+    (value: string) => {
+      const textarea = textareaRef.current;
+      if (!textarea) return;
+      const start = textarea.selectionStart ?? draft.length;
+      const end = textarea.selectionEnd ?? start;
+      const before = draft.slice(0, start);
+      const after = draft.slice(end);
+      const prefix = before.length > 0 && !before.endsWith(" ") && !before.endsWith("\n") ? " " : "";
+      const suffix = after.length > 0 && !after.startsWith(" ") && !after.startsWith("\n") ? " " : "";
+      const next = `${before}${prefix}${value}${suffix}${after}`;
+      const cursor = start + prefix.length + value.length + suffix.length;
+      onDraftChange(next, cursor);
+      window.requestAnimationFrame(() => {
+        textarea.focus();
+        textarea.setSelectionRange(cursor, cursor);
+      });
+      setOpen(false);
+    },
+    [draft, textareaRef, onDraftChange, setOpen],
+  );
+
+  return (
+    <div className="option-picker relative inline-flex shrink-0" ref={ref}>
+      <IconButton
+        ref={triggerRef}
+        type="button"
+        className="composer-bare"
+        title={m.library_insert()}
+        aria-label={m.library_insert()}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <WandSparkles size={16} />
+      </IconButton>
+      {open && (
+        <div className="composer-sources-menu absolute bottom-[calc(100%_+_8px)] start-0 z-50 flex min-w-64 max-h-[min(24rem,60vh)] flex-col gap-1 rounded-md border border-border bg-background p-2 shadow-dropdown overflow-y-auto">
+          <span className="px-1 text-sm font-medium text-muted">{m.library_insert()}</span>
+          {skillsQuery.isPending || agentsQuery.isPending ? (
+            <div className="flex items-center gap-2 px-1 py-2 text-subtext text-sm">
+              <Spinner />
+              {m.common_loading()}
+            </div>
+          ) : skills.length === 0 && agents.length === 0 ? (
+            <div className="px-1 py-2 text-sm text-subtext">{m.library_empty()}</div>
+          ) : (
+            <>
+              {skills.map((item) => (
+                <button
+                  key={`skill-${item.id}`}
+                  type="button"
+                  className="flex items-center gap-2 rounded-md px-2 py-1.5 text-start hover:bg-surface"
+                  onClick={async () => {
+                    try {
+                      const { content } = await getLibraryItem(item.kind, item.id, item.source);
+                      insert(content);
+                    } catch (e) {
+                      insert(`@${item.id}`);
+                    }
+                  }}
+                >
+                  <WandSparkles size={14} />
+                  <span className="text-sm text-text">{item.name}</span>
+                  {sourceBadge(item.source)}
+                </button>
+              ))}
+              {agents.map((item) => (
+                <button
+                  key={`agent-${item.id}`}
+                  type="button"
+                  className="flex items-center gap-2 rounded-md px-2 py-1.5 text-start hover:bg-surface"
+                  onClick={() => insert(`@${item.id}`)}
+                >
+                  <Bot size={14} />
+                  <span className="text-sm text-text">{item.name}</span>
+                  {sourceBadge(item.source)}
+                </button>
+              ))}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Middle-pane Library tab — editable team skills, agent shims, plus the
+ * uploaded user skills and LaTeX templates that already lived here. */
+export function LibraryTab() {
   return (
     <div className="settings-view max-w-readable my-0 mx-auto pt-6 px-8 pb-15 [&_h1]:mt-0 [&_h1]:mx-0 [&_h1]:mb-1.5 [&_h1]:text-3xl">
-      <h1>{m.skills_tab_customize()}</h1>
+      <h1>{m.library_title()}</h1>
       <p className="mt-0 mx-0 mb-5 text-base leading-relaxed text-text">
-        {m.skills_overview_description()}
+        {m.library_description()}
       </p>
 
+      <LibrarySection kind="skill" title={m.skills_tab_skills()} />
+      <LibrarySection kind="agent" title={m.library_agents()} />
       <SkillsCard />
       <LatexTemplatesCard />
     </div>
   );
 }
+
+// Backward-compatible alias for any callers that still import SkillsTab.
+export const SkillsTab = LibraryTab;

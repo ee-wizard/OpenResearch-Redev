@@ -105,7 +105,7 @@ import { SubagentTab } from "./components/SubagentTab";
 import { CodeTab, type CodeView } from "./components/CodeTab";
 import { WorktreeTab, type WorktreeView } from "./components/WorktreeTab";
 import { ArtifactsTab, findArtifactEntry } from "./components/ArtifactsTab";
-import { SkillsTab } from "./components/SkillsTab";
+import { LibraryTab } from "./components/SkillsTab";
 import { PromptGistsTab } from "./components/PromptGistsTab";
 import { ClosableTab } from "./components/ClosableTab";
 import { DetailDrawer, type ExperimentView } from "./components/DetailDrawer";
@@ -1631,7 +1631,7 @@ export default function App({ runtime, projectId, pane }: { runtime: RuntimeInfo
             promptGistsActive={rightTab === "promptGists"}
           >
             {mainView === "skills" ? (
-              <SkillsTab />
+              <LibraryTab />
             ) : mainView !== "chat" ? (
               <SettingsView
                 remote={runtime.kind === "ssh"}

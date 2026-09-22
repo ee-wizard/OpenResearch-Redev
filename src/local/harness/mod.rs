@@ -365,8 +365,9 @@ pub trait Harness: Send + Sync {
     }
 
     /// The shim file contents to write at `skill_target`. `None` if not
-    /// installable.
-    fn skill_shim(&self) -> Option<&'static str> {
+    /// installable. Returns a `Cow` so the default can be a static string while
+    /// editable team-library copies are read from disk.
+    fn skill_shim(&self) -> Option<std::borrow::Cow<'static, str>> {
         None
     }
 
@@ -375,7 +376,7 @@ pub trait Harness: Send + Sync {
     /// than one file (Codex writes both the new `~/.agents/skills/orx/SKILL.md`
     /// and the legacy `~/.codex/prompts/orx.md` for older versions). Each is
     /// written and reported alongside the primary target. Default: none.
-    fn extra_skill_targets(&self) -> Vec<(PathBuf, &'static str)> {
+    fn extra_skill_targets(&self) -> Vec<(PathBuf, std::borrow::Cow<'static, str>)> {
         Vec::new()
     }
 
@@ -594,7 +595,7 @@ pub(crate) fn xdg_config_home() -> PathBuf {
 /// Cursor, and now Codex (`~/.agents/skills/orx/`) all read this same format.
 /// The frontmatter `description` drives auto-discovery and the `/orx`
 /// invocation; the body only points the agent at the bundled guide.
-pub(super) const CLAUDE_SKILL: &str = r#"---
+pub(crate) const CLAUDE_SKILL: &str = r#"---
 name: orx
 description: Drive automated ML research on OpenResearch with the `orx` CLI — create experiments, launch and monitor runs on compute, analyze local results and logs, and search literature. Use whenever the user wants to understand, explain, explore, or work on an OpenResearch project, run experiments, do auto-research, or mentions orx or OpenResearch.
 ---
@@ -635,7 +636,7 @@ compute or account command reports `Not logged in`, ask the user to run
 /// Plain markdown for broad version compatibility; `$ARGUMENTS` is substituted
 /// with whatever the user types after the command (and reads fine as-is if their
 /// Codex doesn't expand it).
-pub(super) const CODEX_PROMPT: &str = r#"Drive automated ML research on OpenResearch using the `orx` CLI.
+pub(crate) const CODEX_PROMPT: &str = r#"Drive automated ML research on OpenResearch using the `orx` CLI.
 
 Start by running `orx skill` to load the current operating manual — the cardinal
 rules, a command quick-reference, and a bundled index of modules. Always read it
@@ -655,6 +656,18 @@ compute or account command reports `Not logged in`, ask the user to run
 Research goal:
 $ARGUMENTS
 "#;
+
+/// Read the primary shim for an agent from the editable team library, falling
+/// back to the static string shipped with this binary.
+pub(crate) fn read_agent_shim(agent_id: &str) -> String {
+    crate::local::library::read_agent_shim(agent_id)
+}
+
+/// Read the legacy Codex prompt from the editable team library, falling back
+/// to the static string shipped with this binary.
+pub(crate) fn read_codex_legacy_prompt() -> String {
+    crate::local::library::read_codex_legacy_prompt()
+}
 
 #[cfg(test)]
 mod tests {

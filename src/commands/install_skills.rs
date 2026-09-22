@@ -44,7 +44,7 @@ async fn write_shim(harness: &dyn Harness) -> Result<Vec<PathBuf>> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).await?;
         }
-        fs::write(&path, contents).await?;
+        fs::write(&path, contents.as_ref()).await?;
         written.push(path);
     }
     Ok(written)
@@ -61,6 +61,8 @@ pub(crate) async fn install_opencode_shim() -> Result<Vec<PathBuf>> {
 }
 
 pub async fn run(args: crate::InstallSkillsArgs) -> Result<()> {
+    // Make sure editable library copies exist before installing from them.
+    crate::local::library::ensure_team_library()?;
     let all = installable();
     let targets: Vec<&dyn Harness> = match args.agent.as_deref() {
         Some("all") | Some("both") => all.iter().map(Box::as_ref).collect(),
@@ -156,6 +158,19 @@ async fn write_skill_set(
             Err(error) => return Err(error.into()),
         }
         fs::create_dir_all(&dir).await?;
+
+        // Prefer the editable library copy so team customizations reach the agent.
+        if let Some(lib_dir) = crate::local::library::builtin_skill_source_dir(skill.name) {
+            let src = lib_dir.clone();
+            let dest = dir.clone();
+            tokio::task::spawn_blocking(move || {
+                crate::local::user_skills::copy_dir_all(&src, &dest)
+            })
+            .await??;
+            written.push(dir.join("SKILL.md"));
+            continue;
+        }
+
         let path = dir.join("SKILL.md");
         fs::write(&path, skill.content).await?;
         for resource in skill.resources {

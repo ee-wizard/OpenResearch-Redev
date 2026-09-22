@@ -263,6 +263,10 @@ pub async fn run(args: UpArgs) -> Result<()> {
         Err(error) => return Err(anyhow!("Could not bind 127.0.0.1:{}: {}", port, error)),
     };
     let actual_port = listener.local_addr()?.port();
+    // Seed the editable team library so later reads (harness shims, session
+    // skills, and the library API) operate from the data dir copies.
+    local::library::ensure_team_library()?;
+
     // Open early so the schema exists before any request or agent spawn.
     {
         let store = Store::open()?;
@@ -885,6 +889,14 @@ fn router(state: AppState, remote_auth: Option<RemoteAuth>) -> Router {
                 .post(upload_latex_template)
                 .delete(delete_latex_template),
         )
+        .route("/api/library", get(list_library))
+        .route("/api/library/{kind}", post(create_library_item))
+        .route(
+            "/api/library/{kind}/{id}",
+            get(get_library_item_endpoint)
+                .patch(update_library_item)
+                .delete(delete_library_item),
+        )
         .route(
             "/api/chat/sessions",
             get(list_chat_sessions).post(create_chat_session),
@@ -1349,6 +1361,154 @@ async fn delete_user_skill(Query(q): Query<DeleteByNameQ>) -> ApiResult {
         .map_err(|e| ApiError::from(anyhow!(e)))?
         .map_err(bad_request)?;
     Ok(Json(json!({ "ok": true })))
+}
+
+// --- team library ------------------------------------------------------------
+
+#[derive(Deserialize)]
+struct LibraryQ {
+    kind: Option<String>,
+    source: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct LibrarySourceQ {
+    source: Option<String>,
+}
+
+fn parse_library_kind(s: &str) -> std::result::Result<crate::local::library::LibraryKind, ApiError> {
+    match s {
+        "skill" => Ok(crate::local::library::LibraryKind::Skill),
+        "agent" => Ok(crate::local::library::LibraryKind::Agent),
+        _ => Err(bad_request(format!("invalid library kind: {s}"))),
+    }
+}
+
+fn parse_library_source(
+    s: &str,
+) -> std::result::Result<crate::local::library::LibrarySource, ApiError> {
+    match s {
+        "builtin" => Ok(crate::local::library::LibrarySource::BuiltIn),
+        "team" => Ok(crate::local::library::LibrarySource::Team),
+        "project" => Ok(crate::local::library::LibrarySource::Project),
+        _ => Err(bad_request(format!("invalid library source: {s}"))),
+    }
+}
+
+async fn list_library(Query(q): Query<LibraryQ>) -> ApiResult {
+    let kind = q
+        .kind
+        .as_deref()
+        .map(parse_library_kind)
+        .transpose()?;
+    let source = q
+        .source
+        .as_deref()
+        .map(parse_library_source)
+        .unwrap_or(Ok(crate::local::library::LibrarySource::Team))?;
+    let items = tokio::task::spawn_blocking(move || {
+        crate::local::library::list_library_items(kind, source)
+    })
+    .await
+    .map_err(|e| ApiError::from(anyhow!("library task failed: {e}")))??;
+    Ok(Json(json!({ "items": items })))
+}
+
+async fn get_library_item_endpoint(
+    Path((kind, id)): Path<(String, String)>,
+    Query(q): Query<LibrarySourceQ>,
+) -> ApiResult {
+    let kind = parse_library_kind(&kind)?;
+    let source = q
+        .source
+        .as_deref()
+        .map(parse_library_source)
+        .unwrap_or(Ok(crate::local::library::LibrarySource::Team))?;
+    let item = tokio::task::spawn_blocking(move || {
+        crate::local::library::get_library_item(kind, &id, source)
+    })
+    .await
+    .map_err(|e| ApiError::from(anyhow!("library task failed: {e}")))??
+    .ok_or_else(|| not_found("library item"))?;
+    let item_for_read = item.clone();
+    let content = tokio::task::spawn_blocking(move || {
+        crate::local::library::read_library_content(&item_for_read)
+    })
+    .await
+    .map_err(|e| ApiError::from(anyhow!("library task failed: {e}")))??;
+    Ok(Json(json!({ "item": item, "content": content })))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateLibraryItemReq {
+    name: String,
+    content: String,
+}
+
+async fn create_library_item(
+    Path(kind): Path<String>,
+    Json(req): Json<CreateLibraryItemReq>,
+) -> ApiResult {
+    let kind = parse_library_kind(&kind)?;
+    let name = req.name.trim().to_string();
+    if name.is_empty() {
+        return Err(bad_request("name is required"));
+    }
+    let item = tokio::task::spawn_blocking(move || {
+        crate::local::library::create_team_library_item(kind, &name, &req.content)
+    })
+    .await
+    .map_err(|e| ApiError::from(anyhow!("library task failed: {e}")))?
+    .map_err(bad_request)?;
+    Ok(Json(json!({ "item": item })))
+}
+
+#[derive(Deserialize)]
+struct UpdateLibraryItemReq {
+    content: String,
+}
+
+async fn update_library_item(
+    Path((kind, id)): Path<(String, String)>,
+    Query(q): Query<LibrarySourceQ>,
+    Json(req): Json<UpdateLibraryItemReq>,
+) -> ApiResult {
+    let kind = parse_library_kind(&kind)?;
+    let source = q
+        .source
+        .as_deref()
+        .map(parse_library_source)
+        .unwrap_or(Ok(crate::local::library::LibrarySource::Team))?;
+    let path = tokio::task::spawn_blocking(move || {
+        crate::local::library::write_library_content(kind, &id, source, &req.content)
+    })
+    .await
+    .map_err(|e| ApiError::from(anyhow!("library task failed: {e}")))?
+    .map_err(bad_request)?;
+    Ok(Json(json!({ "path": path })))
+}
+
+async fn delete_library_item(
+    Path((kind, id)): Path<(String, String)>,
+    Query(q): Query<LibrarySourceQ>,
+) -> ApiResult {
+    let kind = parse_library_kind(&kind)?;
+    let source = q
+        .source
+        .as_deref()
+        .map(parse_library_source)
+        .unwrap_or(Ok(crate::local::library::LibrarySource::Team))?;
+    if source != crate::local::library::LibrarySource::Team {
+        return Err(bad_request("only team library items can be deleted"));
+    }
+    let deleted = tokio::task::spawn_blocking(move || {
+        crate::local::library::delete_team_library_item(kind, &id)
+    })
+    .await
+    .map_err(|e| ApiError::from(anyhow!("library task failed: {e}")))?
+    .map_err(bad_request)?;
+    Ok(Json(json!({ "deleted": deleted })))
 }
 
 fn latex_template_json(t: &crate::local::latex_templates::LatexTemplate) -> Value {

@@ -214,8 +214,8 @@ impl Harness for OhMyPi {
         )
     }
 
-    fn skill_shim(&self) -> Option<&'static str> {
-        Some(super::CLAUDE_SKILL)
+    fn skill_shim(&self) -> Option<std::borrow::Cow<'static, str>> {
+        Some(std::borrow::Cow::Owned(super::read_agent_shim(self.id())))
     }
 
     fn session_skills_dir(&self) -> Option<&'static str> {
