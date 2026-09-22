@@ -1660,13 +1660,22 @@ async fn project_path_status(Query(q): Query<ProjectPathStatusQ>) -> ApiResult {
 }
 
 async fn pick_project_folder() -> ApiResult {
-    let path = tokio::task::spawn_blocking(crate::folder_picker::pick_folder)
+    let result = tokio::task::spawn_blocking(crate::folder_picker::pick_folder)
         .await
         .map_err(|error| ApiError::from(anyhow!("folder picker task failed: {error}")))?
-        .map_err(bad_request)?;
-    Ok(Json(json!({
-        "path": path.map(|path| path.to_string_lossy().into_owned()),
-    })))
+        .map_err(bad_request);
+    match result {
+        Ok(path) => Ok(Json(json!({
+            "path": path.map(|path| path.to_string_lossy().into_owned()),
+        }))),
+        Err(error) if error.1.contains("No native folder picker is available") => {
+            Ok(Json(json!({
+                "fallback": true,
+                "error": error.1,
+            })))
+        }
+        Err(error) => Err(error),
+    }
 }
 
 // --- papers (new-project "from a paper" flow; proxies alphaXiv) ------------

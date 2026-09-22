@@ -1219,5 +1219,6 @@
   "library_name_placeholder": "Name (lowercase, dashes allowed)",
   "library_content_placeholder": "Markdown content…",
   "library_insert": "Insert skill or agent",
-  "library_empty": "No library items yet."
+  "library_empty": "No library items yet.",
+  "new_project_folder_picker_fallback": "No native folder picker is available. Type or paste the folder path below."
 }

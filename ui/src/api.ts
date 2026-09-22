@@ -249,8 +249,12 @@ export const getProjectPathStatus = (path = "", signal?: AbortSignal) => {
   return get<ProjectPathStatus>(`/api/project-path/status${query}`, signal);
 };
 
+export type FolderPickerResult =
+  | { path: string | null }
+  | { fallback: true; error: string };
+
 export const pickProjectFolder = () =>
-  post<{ path: string | null }>("/api/project-path/pick").then((result) => result.path);
+  post<FolderPickerResult>("/api/project-path/pick");
 
 export interface NewProject {
   name: string;

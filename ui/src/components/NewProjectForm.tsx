@@ -93,6 +93,7 @@ export function NewProjectForm({
   const [paperQuery, setPaperQuery] = useState("");
   const [paper, setPaper] = useState<ResolvedPaper | null>(null);
   const [choosingPaper, setChoosingPaper] = useState(false);
+  const [folderPickerFallback, setFolderPickerFallback] = useState(false);
   const seq = useRef(0);
   const folderPickSeq = useRef(0);
   const drafts = useRef<Record<Mode, ProjectDraft>>({
@@ -199,6 +200,7 @@ export function NewProjectForm({
     setError(null);
     setChoosingPaper(false);
     setPickingFolder(false);
+    setFolderPickerFallback(false);
     setName(nextDraft.name);
     setNameTouched(nextDraft.nameTouched);
     setPath(nextDraft.path);
@@ -211,8 +213,15 @@ export function NewProjectForm({
     setPickingFolder(true);
     setError(null);
     try {
-      const selected = await pickProjectFolder();
-      if (request !== folderPickSeq.current || !selected) return;
+      const result = await pickProjectFolder();
+      if (request !== folderPickSeq.current) return;
+      if ("fallback" in result) {
+        setFolderPickerFallback(true);
+        setPathTouched(true);
+        return;
+      }
+      const selected = result.path;
+      if (!selected) return;
       setPathTouched(true);
       setPath(selected);
       void queryClient.invalidateQueries(getProjectPathStatusQuery(selected));
@@ -489,7 +498,7 @@ export function NewProjectForm({
                 </span>
               )}
             </label>
-          ) : mode === "folder" && !remote ? (
+          ) : mode === "folder" && !remote && !folderPickerFallback ? (
             <button
               data-initial-focus
               type="button"
@@ -509,7 +518,8 @@ export function NewProjectForm({
             <label className="project-location-field">
               <span className="project-location-label !font-medium">{m.new_project_form_project_location()}</span>
               <input
-                data-initial-focus
+                data-initial-focus={!folderPickerFallback || undefined}
+                autoFocus={folderPickerFallback}
                 className="text-sm font-normal"
                 value={path}
                 onChange={(event) => {
@@ -520,6 +530,11 @@ export function NewProjectForm({
                 spellCheck={false}
                 dir="ltr"
               />
+              {folderPickerFallback && (
+                <span className="folder-picker-hint" role="note">
+                  {m.new_project_folder_picker_fallback()}
+                </span>
+              )}
             </label>
           ) : name.trim() ? (
             <label className="project-location-field">
