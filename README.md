@@ -48,6 +48,71 @@ or a custom endpoint with OpenCode.
 Create an account at [openresearch.sh](https://openresearch.sh) to receive email
 updates and use managed OpenResearch compute.
 
+## Development
+
+Build and run OpenResearch from source.
+
+### Prerequisites
+
+- [Rust](https://www.rust-lang.org/tools/install) (stable) with `rustfmt` and `clippy`
+- [Node.js](https://nodejs.org/) 22
+- [pnpm](https://pnpm.io/installation) 10
+
+### UI setup
+
+```sh
+cd ui
+pnpm install --frozen-lockfile
+pnpm exec paraglide-js compile --silent --emit-ts-declarations
+pnpm typecheck
+```
+
+### Rust checks
+
+```sh
+cargo fmt --all --check
+cargo clippy --all-targets -- -D warnings
+```
+
+### Debug build
+
+```sh
+cargo build --locked
+```
+
+Run the dashboard:
+
+```sh
+./target/debug/orx up
+```
+
+This opens the local dashboard at `http://127.0.0.1:4791`.
+
+### Release build
+
+```sh
+cargo build --release --locked
+```
+
+The release binary is produced at `target/release/orx`.
+
+### Tests
+
+```sh
+cargo test --locked
+node --test --experimental-strip-types ui/tests/*.test.mjs
+```
+
+### Working on the UI
+
+`ui/dist` is committed, so `cargo build` serves the pre-built UI. After
+changing UI source, rebuild the assets from `ui/`:
+
+```sh
+cd ui
+pnpm build
+```
+
 ## Built for research agents
 
 | | OpenResearch gives you |
