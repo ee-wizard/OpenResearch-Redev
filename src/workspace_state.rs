@@ -97,6 +97,11 @@ pub enum Pane {
         session_id: String,
         spawn_part_id: String,
     },
+    /// Standalone home-tab panes. The UI's `parsePane` accepts these shapes as
+    /// well as the `Home` equivalents (its `paneTab` maps both to the same tab),
+    /// so a URL carrying either form must survive a round trip through here.
+    PromptGists,
+    Handbook,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
@@ -150,7 +155,7 @@ impl Pane {
     fn valid(&self) -> bool {
         let nonempty = |value: &String| !value.is_empty();
         match self {
-            Self::Home { .. } => true,
+            Self::Home { .. } | Self::PromptGists | Self::Handbook => true,
             Self::Experiment {
                 experiment_id,
                 run_id,
@@ -337,6 +342,29 @@ mod tests {
             .unwrap()
             .x = f64::INFINITY;
         assert!(state.validate().is_err());
+    }
+
+    /// The UI stores home tabs as `{kind:"home",view:…}` but its `parsePane`
+    /// also accepts the bare `{kind:"handbook"}` / `{kind:"promptGists"}` shapes
+    /// (both map to the same tab). A URL in that form is kept as `lastLocation`,
+    /// so rejecting the bare shape silently drops the whole saved workspace.
+    #[test]
+    fn home_tab_panes_the_ui_can_store_are_accepted() {
+        for pane in [
+            json!({"kind": "home", "view": "handbook"}),
+            json!({"kind": "home", "view": "promptGists"}),
+            json!({"kind": "handbook"}),
+            json!({"kind": "promptGists"}),
+        ] {
+            let parsed: Pane = serde_json::from_value(pane.clone()).unwrap();
+            assert!(parsed.valid());
+            assert_eq!(serde_json::to_value(&parsed).unwrap(), pane);
+            let location = format!(
+                "/projects/demo/tasks/new?pane={}",
+                urlencoding::encode(&pane.to_string())
+            );
+            assert!(valid_location(&location), "{pane}");
+        }
     }
 
     #[test]

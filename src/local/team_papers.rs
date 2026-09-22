@@ -17,6 +17,20 @@ use crate::store::{now_ms, Store};
 
 const TEAM_PAPERS_DIR: &str = ".openresearch/team-papers";
 
+/// A paper id names exactly one directory under the team-papers root. Ids are
+/// minted as UUIDs, but they also arrive from an API path segment (percent-
+/// decoded), so a `..` or a separator must never reach the `join` below.
+fn validate_paper_id(paper_id: &str) -> Result<()> {
+    if paper_id.is_empty()
+        || !paper_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(anyhow!("Invalid paper id: {paper_id}"));
+    }
+    Ok(())
+}
+
 /// Project-local storage root for team papers.
 pub fn team_papers_dir(project: &LocalProject) -> PathBuf {
     Path::new(&project.project_dir).join(TEAM_PAPERS_DIR)
@@ -137,6 +151,7 @@ fn extract_text_with_pdftotext(pdf_path: &Path, text_path: &Path) -> Result<Opti
 /// Delete the paper files and the store row. Files are removed first so a
 /// partial failure leaves the row (rather than orphan files).
 pub fn delete_team_paper(store: &Store, project: &LocalProject, paper_id: &str) -> Result<()> {
+    validate_paper_id(paper_id)?;
     let dir = paper_pdf_path(project, paper_id)
         .parent()
         .expect("paper path has a parent directory")
@@ -151,6 +166,7 @@ pub fn delete_team_paper(store: &Store, project: &LocalProject, paper_id: &str) 
 
 /// Read the extracted plain text for a paper.
 pub fn read_text(project: &LocalProject, paper_id: &str) -> Result<String> {
+    validate_paper_id(paper_id)?;
     let path = paper_text_path(project, paper_id);
     std::fs::read_to_string(&path).map_err(|e| anyhow!("Could not read {}: {}", path.display(), e))
 }
@@ -269,6 +285,25 @@ mod tests {
         let listed = store.list_team_papers(&project.id).unwrap();
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].id, paper.id);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Ids reach these functions from an API path segment (percent-decoded), so
+    /// a `..` must be refused before it becomes a directory to remove or read.
+    #[test]
+    fn paper_ids_cannot_escape_the_team_papers_root() {
+        let dir = std::env::temp_dir().join(format!("orx-team-papers-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let project = project_fixture(&dir);
+        let store = Store::open_at(dir.join("store")).unwrap();
+        store.create_local_project(&project).unwrap();
+
+        for id in ["..", "", "../../etc", "a/b"] {
+            assert!(read_text(&project, id).is_err(), "{id}");
+            assert!(delete_team_paper(&store, &project, id).is_err(), "{id}");
+        }
+        assert!(dir.is_dir());
 
         let _ = std::fs::remove_dir_all(&dir);
     }

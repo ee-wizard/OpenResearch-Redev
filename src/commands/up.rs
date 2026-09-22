@@ -1434,7 +1434,8 @@ async fn get_library_item_endpoint(
         crate::local::library::get_library_item(kind, &id, source)
     })
     .await
-    .map_err(|e| ApiError::from(anyhow!("library task failed: {e}")))??
+    .map_err(|e| ApiError::from(anyhow!("library task failed: {e}")))?
+    .map_err(bad_request)?
     .ok_or_else(|| not_found("library item"))?;
     let item_for_read = item.clone();
     let content = tokio::task::spawn_blocking(move || {
@@ -1798,7 +1799,7 @@ async fn create_project(
         return Err(bad_request("name is required"));
     }
     // GitHub repo names are ASCII-only; warn when the name will be mangled.
-    let name_has_non_ascii = name.chars().any(|c| !c.is_ascii());
+    let name_has_non_ascii = !name.is_ascii();
     let locale = req.locale.unwrap_or_else(|| "en".to_string());
     let path = req.path;
     let create_folder = req.create_folder;
@@ -2260,7 +2261,7 @@ async fn update_project(
             return Err(bad_request("name cannot be empty"));
         }
         let name = name.trim().to_string();
-        if name.chars().any(|c| !c.is_ascii()) {
+        if !name.is_ascii() {
             return Err(bad_request(
                 "Project names with non-ASCII characters (e.g. Chinese) produce GitHub repository names that lose those characters. Use an ASCII-only name."
             ));
@@ -2522,6 +2523,7 @@ struct UpdatePromptGistReq {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct PromptGistsQuery {
     project_id: Option<String>,
 }

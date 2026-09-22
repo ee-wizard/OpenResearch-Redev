@@ -190,6 +190,7 @@ pub fn get_library_item(
     source: LibrarySource,
 ) -> Result<Option<LibraryItem>> {
     ensure_team_library()?;
+    validate_item_id(id)?;
     match kind {
         LibraryKind::Skill => get_skill_item(id, source),
         LibraryKind::Agent => get_agent_item(id, source),
@@ -211,6 +212,7 @@ pub fn write_library_content(
     content: &str,
 ) -> Result<PathBuf> {
     ensure_team_library()?;
+    validate_item_id(id)?;
     let path = match (kind, source) {
         (LibraryKind::Skill, LibrarySource::BuiltIn) => {
             library_dir().join("skills").join(id).join("SKILL.md")
@@ -281,6 +283,7 @@ pub fn create_team_library_item(
 /// removes the cloned directory.
 pub fn delete_library_item(kind: LibraryKind, id: &str, source: LibrarySource) -> Result<bool> {
     ensure_team_library()?;
+    validate_item_id(id)?;
     let dir = match (kind, source) {
         (LibraryKind::Skill, LibrarySource::Team) => {
             library_dir().join("skills").join("team").join(id)
@@ -545,6 +548,20 @@ fn slugify_name(name: &str) -> Result<String> {
     Ok(slug)
 }
 
+/// An id *used as a path component* must be exactly one directory name. Callers
+/// receive the id from an API path segment, which arrives percent-decoded — a
+/// request for `..%2F..%2Fvictim` hands us `../../victim`, and even a single `.`
+/// or `..` redirects the `join` below out of the source root. Checked against
+/// `join`'s own rules rather than a slug pattern, because supervisor skill ids
+/// are directory names from the cloned repository.
+fn validate_item_id(id: &str) -> Result<()> {
+    // A drive/UNC prefix (`C:foo`, `\\server\share`) replaces the base too.
+    if id.is_empty() || id == "." || id == ".." || id.contains(['/', '\\', ':', '\0']) {
+        return Err(anyhow!("Invalid library item id: {id}"));
+    }
+    Ok(())
+}
+
 fn validate_team_id(kind: LibraryKind, id: &str) -> Result<()> {
     if !crate::local::user_skills::is_valid_slug(id) {
         return Err(anyhow!(
@@ -647,6 +664,32 @@ mod tests {
         assert!(library_dir().join("agents/claude-code/shim.md").exists());
         assert!(library_dir().join("agents/codex/shim.md").exists());
         assert!(library_dir().join("agents/codex/legacy-prompt.md").exists());
+    }
+
+    /// Ids reach these functions percent-decoded from an API path segment, so a
+    /// request for `..%2F..%2F…` arrives as a real traversal. Nothing may leave
+    /// its source root — least of all `remove_dir_all`.
+    #[test]
+    fn item_ids_cannot_escape_the_library_root() {
+        let _tmp = TmpDataDir::new();
+        let escape = "../../../../victim";
+
+        // `..` names the source root itself: `<library>/skills/team/..` is every
+        // seeded skill, and `<library>/skills/.supervisor/..` all of them.
+        assert!(delete_library_item(LibraryKind::Skill, "..", LibrarySource::Team).is_err());
+        assert!(delete_library_item(LibraryKind::Skill, "..", LibrarySource::Supervisor).is_err());
+        assert!(delete_library_item(LibraryKind::Agent, "..", LibrarySource::Team).is_err());
+        assert!(library_dir().join("skills").join("orx-git").is_dir());
+
+        assert!(get_library_item(LibraryKind::Skill, escape, LibrarySource::BuiltIn).is_err());
+        assert!(
+            write_library_content(LibraryKind::Skill, escape, LibrarySource::Team, "x").is_err()
+        );
+
+        // Supervisor skill ids are directory names from the cloned repo, so the
+        // guard must not reject an id a real repository could contain.
+        assert!(get_library_item(LibraryKind::Skill, "Supervisor_Skills.v2", LibrarySource::Supervisor)
+            .is_ok());
     }
 
     #[test]
